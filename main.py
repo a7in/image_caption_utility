@@ -1,6 +1,7 @@
 import os
 from tkinter import *
 from tkinter import filedialog, messagebox
+from idlelib.tooltip import Hovertip # for tooltips
 from PIL import Image, ImageTk
 import subprocess
 import platform
@@ -19,11 +20,16 @@ class ImageCaptionApp:
         self.open_folder_button = Button(b_frame, text="Reopen folder", command=self.open_folder)
         self.open_folder_button.pack(side=LEFT, padx=2, pady=2)
 
-        self.save_button = Button(b_frame, text="Save", command=self.save_caption)
-        self.save_button.pack(side=LEFT, padx=2, pady=2)
-
         self.search_empty_button = Button(b_frame, text="Search empty", command=self.search_empty_caption)
         self.search_empty_button.pack(side=LEFT, padx=2, pady=2)
+
+        self.save_button = Button(b_frame, text="Save", command=self.save_caption)
+        Hovertip(self.save_button, text="Save current edited prompt")
+        self.save_button.pack(side=LEFT, padx=2, pady=2)
+
+        self.cancel_button = Button(b_frame, text="Cancel", command=self.load_caption)
+        Hovertip(self.cancel_button, text="Return to original prompt")
+        self.cancel_button.pack(side=LEFT, padx=2, pady=2)
 
         main_frame = Frame(self.root)
         main_frame.pack(fill=X)
@@ -119,11 +125,25 @@ class ImageCaptionApp:
             messagebox.showinfo("No Images", "No images found in the selected directory.")
             self.root.quit()
 
+    # load caption from current_caption_file
+    def load_caption(self):
+        if os.path.exists(self.current_caption_file):
+            with open(self.current_caption_file, 'r', encoding='utf-8') as f:
+                caption = f.read()
+        else:
+            caption = ""
+            with open(self.current_caption_file, 'w', encoding='utf-8') as f:
+                f.write(caption)
+
+        self.text_area.config(state=NORMAL)
+        self.text_area.delete(1.0, END)
+        self.text_area.insert(END, caption)
+
     def display_image(self):
         if self.image_files:
             self.index_label.config(text=f"{self.image_index + 1} of {len(self.image_files)}")            
             image_path = os.path.join(self.image_directory, self.image_files[self.image_index])
-            caption_file = os.path.splitext(image_path)[0] + '.txt'
+            self.current_caption_file = os.path.splitext(image_path)[0] + '.txt'
 
             image = Image.open(image_path)
             image.thumbnail((400, 400))
@@ -133,25 +153,14 @@ class ImageCaptionApp:
 
             self.file_label.config(text=os.path.basename(image_path))
             self.current_image = image_path
-            self.current_caption_file = caption_file
-
-            if os.path.exists(caption_file):
-                with open(caption_file, 'r', encoding='utf-8') as f:
-                    caption = f.read()
-            else:
-                caption = ""
-                with open(caption_file, 'w', encoding='utf-8') as f:
-                    f.write(caption)
-
-            self.text_area.config(state=NORMAL)
-            self.text_area.delete(1.0, END)
-            self.text_area.insert(END, caption)
+            
+            self.load_caption()
 
             # Highlight the current file in file_list
             self.file_list.selection_clear(0, END)
             self.file_list.selection_set(self.image_index)
             self.file_list.see(self.image_index)  # Scroll to the active file
-
+    
     def save_caption(self):
         if self.current_caption_file:
             caption = self.text_area.get(1.0, END).strip()
