@@ -2,9 +2,10 @@
 
 
 ## Features:
-- Built-in translator to EN.
+- Built-in translator to EN (google).
 - Automatic saving and creation captions with .txt file extension.
 - Search for unsigned images.
+- Find and replace text in all files.
 
 ## Install:
 1. Clone the repository or download the source code.
