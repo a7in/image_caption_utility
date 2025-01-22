@@ -22,6 +22,9 @@ class ImageCaptionApp:
 
         self.search_empty_button = Button(b_frame, text="Search empty", command=self.search_empty_caption)
         self.search_empty_button.pack(side=LEFT, padx=2, pady=2)
+        
+        self.find_replace_button = Button(b_frame, text="Find-Replace", command=self.open_find_replace)
+        self.find_replace_button.pack(side=LEFT, padx=2, pady=2)        
 
         self.save_button = Button(b_frame, text="Save", command=self.save_caption)
         Hovertip(self.save_button, text="Save current edited prompt")
@@ -91,6 +94,44 @@ class ImageCaptionApp:
 
         self.load_images()
         self.display_image()
+        
+    def open_find_replace(self):
+        def perform_replace():
+            find_text = find_entry.get()
+            replace_text = replace_entry.get()
+            if not find_text:
+                messagebox.showerror("Error", "Please enter text to find.")
+                return
+
+            find_replace_button.config(state=DISABLED)
+            count = 0
+
+            for i, image_path in enumerate(self.image_files):
+                caption_file = os.path.splitext(image_path)[0] + '.txt'
+                if os.path.exists(caption_file):
+                    with open(caption_file, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    new_content = content.replace(find_text, replace_text)
+                    if content != new_content:
+                        count += content.count(find_text)
+                        with open(caption_file, 'w', encoding='utf-8') as f:
+                            f.write(new_content)
+
+            messagebox.showinfo("Done", f"Replaced: {count}")
+
+        find_replace_window = Toplevel(self.root)
+        find_replace_window.title("Find and Replace")
+
+        Label(find_replace_window, text="Find:").grid(row=0, column=0, padx=5, pady=5)
+        find_entry = Entry(find_replace_window, width=30)
+        find_entry.grid(row=0, column=1, padx=5, pady=5)
+
+        Label(find_replace_window, text="Replace:").grid(row=1, column=0, padx=5, pady=5)
+        replace_entry = Entry(find_replace_window, width=30)
+        replace_entry.grid(row=1, column=1, padx=5, pady=5)
+
+        find_replace_button = Button(find_replace_window, text="Replace", command=perform_replace)
+        find_replace_button.grid(row=2, column=0, columnspan=2, pady=10)
 
     def translate_text(self):
         if not self.text_area.get(1.0, END).rstrip().endswith(','):
