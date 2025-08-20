@@ -6,6 +6,7 @@
 - Automatic saving and creation captions with .txt file extension.
 - Search for unsigned images.
 - Find and replace text in all files.
+- Rename filenames.
 
 ## Install:
 1. Clone the repository or download the source code.
