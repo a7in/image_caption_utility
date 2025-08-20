@@ -13,9 +13,13 @@ class ImageCaptionApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Image Caption Utility")
+        
+        container = Frame(self.root)
+        container.pack(fill=BOTH, expand=True)
 
-        b_frame = Frame(self.root)
-        b_frame.pack(fill=X)
+        # buttons frame (top)
+        b_frame = Frame(container)
+        b_frame.grid(row=0, column=0, sticky="ew")
 
         self.open_folder_button = Button(b_frame, text="Reopen folder", command=self.open_folder)
         self.open_folder_button.pack(side=LEFT, padx=2, pady=2)
@@ -34,14 +38,36 @@ class ImageCaptionApp:
         Hovertip(self.cancel_button, text="Return to original prompt")
         self.cancel_button.pack(side=LEFT, padx=2, pady=2)
 
-        main_frame = Frame(self.root)
-        main_frame.pack(fill=X)
+        main_frame = Frame(container)
+        main_frame.grid(row=1, column=0, sticky="nsew")
+        
+        container.grid_rowconfigure(1, weight=1)
+        container.grid_columnconfigure(0, weight=1)
+        
+        main_frame.grid_rowconfigure(0, weight=1)
+        main_frame.grid_columnconfigure(0, weight=1, uniform="half")
+        main_frame.grid_columnconfigure(1, weight=1, uniform="half")
 
+        text_frame_height = root.winfo_screenheight() / 4
+        # --- img_frame (левая часть, 50%) ---
         img_frame = Frame(main_frame)
-        img_frame.pack(side=LEFT, padx=2, pady=2)
+        img_frame.grid(row=0, column=0, sticky="nsew")
+        # Разделяем на 3 ряда: controls (фиксированный), image (70%), text (30%)
+        img_frame.grid_rowconfigure(0, weight=0)  # controls, natural height
+        img_frame.grid_rowconfigure(1, weight=7, minsize=200)  # image
+        img_frame.grid_rowconfigure(2, weight=0, minsize=text_frame_height)  # text
+        img_frame.grid_columnconfigure(0, weight=1)
 
+        # --- nav_frame (правая часть, 50%) ---
+        nav_frame = Frame(main_frame)
+        nav_frame.grid(row=0, column=1, sticky="nsew")
+        nav_frame.grid_rowconfigure(0, weight=1)
+        nav_frame.grid_columnconfigure(0, weight=1)
+        nav_frame.grid_columnconfigure(1, weight=0)
+
+        # --- img_frame ---
         img_ctrl_frame = Frame(img_frame)
-        img_ctrl_frame.pack(side=TOP, fill=X, padx=2, pady=2)
+        img_ctrl_frame.grid(row=0, column=0, sticky="ew", padx=2, pady=2)
 
         self.prev_button = Button(img_ctrl_frame, text="Prev", command=lambda: self.select_image(-1))
         self.prev_button.pack(side=LEFT, padx=2, pady=2)
@@ -52,50 +78,115 @@ class ImageCaptionApp:
         self.index_label = Label(img_ctrl_frame, text="", fg="blue")
         self.index_label.pack(side=LEFT, padx=2, pady=2)
 
-        self.file_entry = Entry(img_ctrl_frame, width=80)
-        self.file_entry.pack(side=LEFT, padx=2, pady=2)
+        self.file_entry = Entry(img_ctrl_frame)
+        self.file_entry.pack(side=LEFT, fill=X, expand=True, padx=2, pady=2)
         self.file_entry.bind("<Return>", self.rename_file)
         self.file_entry.bind("<FocusOut>", self.rename_file)
 
-        self.image_label = Label(img_frame, width=768, height=768)
-        self.image_label.pack(side=TOP, fill=X, padx=2, pady=2)
-        self.image_label.bind("<Double-1>", self.open_image)
+        # Image label без фиксированного размера
+        self.image_label = Label(img_frame)
+        self.image_label.grid(row=1, column=0, sticky="nsew", padx=2, pady=2)
+        self.image_label.bind("<Configure>", self.resize_image)
+        self.image_label.bind("<Double-Button-1>", self.open_image)
 
-        text_frame = Frame(main_frame)
-        text_frame.pack(side=LEFT, fill=Y)
+        # --- text_frame (bottom 1/4 of screen height) ---
+        text_frame = Frame(img_frame, height=text_frame_height)
+        text_frame.grid(row=2, column=0, sticky="nsew")
+        text_frame.grid_rowconfigure(0, weight=1)
+        text_frame.grid_propagate(False)
+        text_frame.grid_columnconfigure(0, weight=1, uniform="txt")
+        text_frame.grid_columnconfigure(1, weight=1, uniform="txt")
 
-        self.text_area = Text(text_frame, wrap=WORD, width=40)
-        self.text_area.pack(side=TOP, fill=Y, padx=2, pady=2)
+        self.text_area = Text(text_frame, wrap=WORD, width=1)
+        self.text_area.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
 
         trans_frame = Frame(text_frame)
-        trans_frame.pack(side=TOP, fill=X)
+        trans_frame.grid(row=0, column=1, sticky="nsew", padx=2, pady=2)
+        trans_frame.grid_rowconfigure(2, weight=1)
+        trans_frame.grid_columnconfigure(0, weight=1)
 
         self.trans_button = Button(trans_frame, text="Translate and add -^ from:", command=self.translate_text)
-        self.trans_button.pack(side=LEFT, padx=2, pady=2)
+        self.trans_button.grid(row=0, column=0, sticky="w", padx=2, pady=2)
 
         self.text_lang = Text(trans_frame, width=2, height=1)
-        self.text_lang.pack(side=LEFT, padx=2, pady=2)
+        self.text_lang.grid(row=1, column=0, sticky="w", padx=2, pady=2)
         self.text_lang.insert(END, 'ru')
 
-        self.trans_text_area = Text(text_frame, wrap=WORD, width=40)
-        self.trans_text_area.pack(side=TOP, fill=Y, padx=2, pady=2)
+        self.trans_text_area = Text(trans_frame, wrap=WORD, width=1)
+        self.trans_text_area.grid(row=2, column=0, sticky="nsew", padx=2, pady=2)
 
-        self.file_list = Listbox(main_frame)
-        self.file_list.pack(side=LEFT, fill=BOTH, expand=True, padx=2, pady=2)
+        # --- nav_frame ---
+        self.file_list = Listbox(nav_frame)
+        self.file_list.grid(row=0, column=0, sticky="nsew", padx=(2,0), pady=2)
         self.file_list.bind('<<ListboxSelect>>', self.on_file_select)
 
-        # Создаем Scrollbar и связываем его с Listbox
-        self.scrollbar = Scrollbar(main_frame, orient=VERTICAL, command=self.file_list.yview)
-        self.scrollbar.pack(side=RIGHT, fill=Y)
+        self.scrollbar = Scrollbar(nav_frame, orient=VERTICAL, command=self.file_list.yview, width=18)
+        self.scrollbar.grid(row=0, column=1, sticky="ns", padx=(0,2), pady=2)
         self.file_list.config(yscrollcommand=self.scrollbar.set)
 
         self.image_index = 0
         self.image_files = []
         self.current_image = None
         self.current_caption_file = None
+        self.original_image = None
+        self.photo = None
 
         self.load_images()
         self.display_image()
+        root.state('zoomed') # maximize window
+
+        root.after(200, root.focus_force) # fix focus issue
+
+    def resize_image(self, event=None):
+        if not self.original_image:
+            return
+        # Use event dimensions if available, otherwise use current label size
+        if event:
+            label_width = event.width - 4
+            label_height = event.height - 4
+        else:
+            label_width = self.image_label.winfo_width() - 4
+            label_height = self.image_label.winfo_height() - 4
+
+        if label_width <= 0 or label_height <= 0:
+            return
+        # Scale image with aspect ratio
+        orig_width, orig_height = self.original_image.size
+        ratio = min(label_width / orig_width, label_height / orig_height)
+        new_width = int(orig_width * ratio)
+        new_height = int(orig_height * ratio)
+        resized = self.original_image.resize((new_width, new_height), Image.LANCZOS)
+        self.photo = ImageTk.PhotoImage(resized)
+        self.image_label.config(image=self.photo)
+        self.image_label.image = self.photo  # Keep a reference to prevent garbage collection
+
+    def display_image(self):
+        if self.image_files:
+            self.index_label.config(text=f"{self.image_index + 1} of {len(self.image_files)}")            
+            image_path = os.path.join(self.image_directory, self.image_files[self.image_index])
+            self.current_caption_file = os.path.splitext(image_path)[0] + '.txt'
+
+            try:
+                self.original_image = Image.open(image_path)
+                # Call resize_image directly to update the display immediately
+                self.resize_image()  # No event, uses current label size
+            except Exception as e:
+                messagebox.showerror("Error", f"Cannot open image: {e}")
+                return
+
+            # Show file name in Entry
+            self.file_entry.delete(0, END)
+            self.file_entry.insert(0, os.path.basename(image_path))
+
+            self.current_image = image_path
+        
+            self.load_caption()
+
+            # Highlight the current file in file_list
+            self.file_list.selection_clear(0, END)
+            self.file_list.selection_set(self.image_index)
+            self.file_list.see(self.image_index)  # Scroll to the active file
+
 
     def rename_file(self, event=None):
         if not self.current_image:
@@ -130,16 +221,14 @@ class ImageCaptionApp:
                 os.rename(old_txt, new_txt)
         except Exception as e:
             messagebox.showerror("Rename error", f"Rename error:\n{e}")
-            # откатываем текст в Entry
+            # restore old name
             self.file_entry.delete(0, END)
             self.file_entry.insert(0, old_base)
             return
 
-        # обновляем ссылки
         self.current_image = new_image
         self.current_caption_file = new_txt
 
-        # также обновим список файлов
         self.image_files[self.image_index] = new_image
         self.file_list.delete(self.image_index)
         self.file_list.insert(self.image_index, new_image)
@@ -196,7 +285,7 @@ class ImageCaptionApp:
     def open_folder(self):
         self.load_images()
         self.image_index = 0
-        self.display_image()        
+        self.display_image()
 
     def load_images(self):
         directory = filedialog.askdirectory(title="Select Image Directory")
@@ -232,31 +321,6 @@ class ImageCaptionApp:
         self.text_area.config(state=NORMAL)
         self.text_area.delete(1.0, END)
         self.text_area.insert(END, caption)
-
-    def display_image(self):
-        if self.image_files:
-            self.index_label.config(text=f"{self.image_index + 1} of {len(self.image_files)}")            
-            image_path = os.path.join(self.image_directory, self.image_files[self.image_index])
-            self.current_caption_file = os.path.splitext(image_path)[0] + '.txt'
-
-            image = Image.open(image_path)
-            image.thumbnail((400, 400))
-            photo = ImageTk.PhotoImage(image)
-            self.image_label.config(image=photo)
-            self.image_label.image = photo
-
-            # показываем имя файла в Entry
-            self.file_entry.delete(0, END)
-            self.file_entry.insert(0, os.path.basename(image_path))
-
-            self.current_image = image_path
-        
-            self.load_caption()
-
-            # Highlight the current file in file_list
-            self.file_list.selection_clear(0, END)
-            self.file_list.selection_set(self.image_index)
-            self.file_list.see(self.image_index)  # Scroll to the active file
     
     def save_caption(self):
         if self.current_caption_file:
