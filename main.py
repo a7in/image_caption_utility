@@ -52,8 +52,10 @@ class ImageCaptionApp:
         self.index_label = Label(img_ctrl_frame, text="", fg="blue")
         self.index_label.pack(side=LEFT, padx=2, pady=2)
 
-        self.file_label = Label(img_ctrl_frame, text="")
-        self.file_label.pack(side=LEFT, padx=2, pady=2)
+        self.file_entry = Entry(img_ctrl_frame, width=80)
+        self.file_entry.pack(side=LEFT, padx=2, pady=2)
+        self.file_entry.bind("<Return>", self.rename_file)
+        self.file_entry.bind("<FocusOut>", self.rename_file)
 
         self.image_label = Label(img_frame, width=768, height=768)
         self.image_label.pack(side=TOP, fill=X, padx=2, pady=2)
@@ -94,6 +96,57 @@ class ImageCaptionApp:
 
         self.load_images()
         self.display_image()
+
+    def rename_file(self, event=None):
+        if not self.current_image:
+            return
+
+        old_image = self.current_image
+        old_txt = self.current_caption_file
+
+        directory = os.path.dirname(old_image)
+        old_base = os.path.basename(old_image)
+        new_base = self.file_entry.get().strip()
+
+        if not new_base:
+            self.file_entry.delete(0, END)
+            self.file_entry.insert(0, old_base)
+            return
+
+        # ext
+        if not os.path.splitext(new_base)[1]:
+            new_base += os.path.splitext(old_base)[1]
+
+        new_image = os.path.join(directory, new_base)
+        new_txt = os.path.splitext(new_image)[0] + ".txt"
+
+        # not changed
+        if new_image == old_image:
+            return
+
+        try:
+            os.rename(old_image, new_image)
+            if os.path.exists(old_txt):
+                os.rename(old_txt, new_txt)
+        except Exception as e:
+            messagebox.showerror("Rename error", f"Rename error:\n{e}")
+            # откатываем текст в Entry
+            self.file_entry.delete(0, END)
+            self.file_entry.insert(0, old_base)
+            return
+
+        # обновляем ссылки
+        self.current_image = new_image
+        self.current_caption_file = new_txt
+
+        # также обновим список файлов
+        self.image_files[self.image_index] = new_image
+        self.file_list.delete(self.image_index)
+        self.file_list.insert(self.image_index, new_image)
+
+        self.file_entry.delete(0, END)
+        self.file_entry.insert(0, os.path.basename(new_image))
+
         
     def open_find_replace(self):
         def perform_replace():
@@ -192,9 +245,12 @@ class ImageCaptionApp:
             self.image_label.config(image=photo)
             self.image_label.image = photo
 
-            self.file_label.config(text=os.path.basename(image_path))
+            # показываем имя файла в Entry
+            self.file_entry.delete(0, END)
+            self.file_entry.insert(0, os.path.basename(image_path))
+
             self.current_image = image_path
-            
+        
             self.load_caption()
 
             # Highlight the current file in file_list
