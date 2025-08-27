@@ -1,5 +1,6 @@
 import os
 from tkinter import *
+from tkinter import ttk
 from tkinter import filedialog, messagebox
 from idlelib.tooltip import Hovertip # for tooltips
 from PIL import Image, ImageTk
@@ -12,7 +13,7 @@ translator = Translator()
 class ImageCaptionApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Image Caption Utility")
+        self.root.title("a7in image Caption Utility")
         
         container = Frame(self.root)
         container.pack(fill=BOTH, expand=True)
@@ -78,6 +79,10 @@ class ImageCaptionApp:
         self.index_label = Label(img_ctrl_frame, text="", fg="blue")
         self.index_label.pack(side=LEFT, padx=2, pady=2)
 
+        self.dir_entry = ttk.Combobox(img_ctrl_frame, state="readonly", width=32)
+        self.dir_entry.pack(side=LEFT, padx=2, pady=2)
+        self.dir_entry.bind("<<ComboboxSelected>>", self.on_dir_change)
+
         self.file_entry = Entry(img_ctrl_frame)
         self.file_entry.pack(side=LEFT, fill=X, expand=True, padx=2, pady=2)
         self.file_entry.bind("<Return>", self.rename_file)
@@ -137,6 +142,51 @@ class ImageCaptionApp:
 
         root.after(200, root.focus_force) # fix focus issue
 
+    def on_dir_change(self, event=None):
+        if not self.current_image:
+            return
+        rel_dir = self.dir_entry.get()
+        if rel_dir == "\\":
+            new_dir = self.image_directory
+        else:
+            new_dir = os.path.join(self.image_directory, rel_dir)
+        if not os.path.isdir(new_dir):
+            return
+
+        old_image = self.current_image
+        old_txt = self.current_caption_file
+        base_name = os.path.basename(old_image)
+
+        new_image = os.path.join(new_dir, base_name)
+        new_txt = os.path.splitext(new_image)[0] + ".txt"
+
+        try:
+            os.rename(old_image, new_image)
+            if os.path.exists(old_txt):
+                os.rename(old_txt, new_txt)
+        except Exception as e:
+            messagebox.showerror("Move error", f"Could not move:\n{e}")
+            self.dir_entry.set(os.path.dirname(old_image))  # вернуть обратно
+            return
+
+        # обновляем пути
+        self.current_image = new_image
+        self.current_caption_file = new_txt
+        self.image_files[self.image_index] = new_image
+
+        # обновляем в списке файлов
+        self.file_list.delete(self.image_index)
+        self.file_list.insert(self.image_index, new_image)
+
+        # оставить фокус на строке
+        self.file_list.selection_clear(0, END)
+        self.file_list.selection_set(self.image_index)
+        self.file_list.see(self.image_index)
+
+        # обновить input
+        self.file_entry.delete(0, END)
+        self.file_entry.insert(0, os.path.basename(new_image))
+
     def resize_image(self, event=None):
         if not self.original_image:
             return
@@ -186,6 +236,12 @@ class ImageCaptionApp:
             self.file_list.selection_clear(0, END)
             self.file_list.selection_set(self.image_index)
             self.file_list.see(self.image_index)  # Scroll to the active file
+            
+            current_dir = os.path.dirname(self.current_image)
+            rel_dir = os.path.relpath(current_dir, self.image_directory)
+            if rel_dir == ".":
+                rel_dir = "\\"
+            self.dir_entry.set(rel_dir)
 
 
     def rename_file(self, event=None):
@@ -235,6 +291,11 @@ class ImageCaptionApp:
 
         self.file_entry.delete(0, END)
         self.file_entry.insert(0, os.path.basename(new_image))
+        # line selection
+        self.file_list.selection_clear(0, END)
+        self.file_list.selection_set(self.image_index)
+        self.file_list.see(self.image_index)
+        self.file_entry.focus_set()
 
         
     def open_find_replace(self):
@@ -298,6 +359,15 @@ class ImageCaptionApp:
                         self.image_files.append(os.path.join(root, file))
             self.image_files.sort()
             self.image_directory = directory
+            
+            self.directories = []
+            for root, dirs, _ in os.walk(self.image_directory):
+                rel_path = os.path.relpath(root, self.image_directory)
+                if rel_path == ".":
+                    rel_path = "\\"
+                self.directories.append(rel_path)
+            self.directories.sort()
+            self.dir_entry["values"] = self.directories          
 
             # Populate file_list with the image files
             self.file_list.delete(0, END)
