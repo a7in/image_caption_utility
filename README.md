@@ -1,5 +1,6 @@
 ## Utility for manual viewing and signing of images.
 
+![screenshot](screen.png)
 
 ## Features:
 - Built-in translator to EN (google).
