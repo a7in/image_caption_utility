@@ -7,6 +7,7 @@
 - Search for unsigned images.
 - Find and replace text in all files.
 - Rename filenames.
+- Moving image+caption between directories.
 
 ## Install:
 1. Clone the repository or download the source code.
