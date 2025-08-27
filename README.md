@@ -23,7 +23,6 @@
   python main.py
   ```
 2. Specify the directory with images.
-3. Input field is not active. Switch focus to any other application and return back. This is a known bug. Help me fix it if you know how.
 
 Captions are saved automatically when changing the current image.
 
