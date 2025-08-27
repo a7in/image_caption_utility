@@ -1,4 +1,4 @@
-## Utility for manual viewing and signing of images.
+## Utility for viewing and editing text descriptions of images.
 
 ![screenshot](screen.png)
 
