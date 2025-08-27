@@ -86,7 +86,6 @@ class ImageCaptionApp:
         self.file_entry = Entry(img_ctrl_frame)
         self.file_entry.pack(side=LEFT, fill=X, expand=True, padx=2, pady=2)
         self.file_entry.bind("<Return>", self.rename_file)
-        self.file_entry.bind("<FocusOut>", self.rename_file)
 
         # Image label без фиксированного размера
         self.image_label = Label(img_frame)
@@ -156,6 +155,24 @@ class ImageCaptionApp:
         old_image = self.current_image
         old_txt = self.current_caption_file
         base_name = os.path.basename(old_image)
+        name_no_ext, _ = os.path.splitext(base_name)
+
+        # check name conflict
+        for f in os.listdir(new_dir):
+            f_name, f_ext = os.path.splitext(f)
+            if f_name.lower() == name_no_ext.lower() and f.lower().endswith(('.png', '.jpg', '.jpeg')):
+                messagebox.showerror(
+                    "Move error",
+                    f"In dst dir filename already exists '{f_name}' (file {f}). "
+                    "Please rename first."
+                )
+                # restore
+                old_dir = os.path.dirname(old_image)
+                rel_old = os.path.relpath(old_dir, self.image_directory)
+                if rel_old == ".":
+                    rel_old = "\\"
+                self.dir_entry.set(rel_old)
+                return        
 
         new_image = os.path.join(new_dir, base_name)
         new_txt = os.path.splitext(new_image)[0] + ".txt"
@@ -166,7 +183,7 @@ class ImageCaptionApp:
                 os.rename(old_txt, new_txt)
         except Exception as e:
             messagebox.showerror("Move error", f"Could not move:\n{e}")
-            self.dir_entry.set(os.path.dirname(old_image))  # вернуть обратно
+            self.dir_entry.set(os.path.dirname(old_image))  # restore
             return
 
         # обновляем пути
@@ -270,6 +287,23 @@ class ImageCaptionApp:
         # not changed
         if new_image == old_image:
             return
+
+        # check
+        name_no_ext, _ = os.path.splitext(new_base)
+        for f in os.listdir(directory):
+            f_name, f_ext = os.path.splitext(f)
+            if f_name.lower() == name_no_ext.lower() and f.lower().endswith(('.png', '.jpg', '.jpeg')):
+                # если это не сам файл, который мы сейчас переименовываем
+                if os.path.join(directory, f) != old_image:
+                    messagebox.showerror(
+                        "Rename error",
+                        f"Filename with same name exists '{f_name}' (file {f}). "
+                        "Enter another name."
+                    )
+                    # restore old name
+                    self.file_entry.delete(0, END)
+                    self.file_entry.insert(0, old_base)
+                    return            
 
         try:
             os.rename(old_image, new_image)
