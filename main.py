@@ -141,6 +141,12 @@ class ImageCaptionApp:
 
         root.after(200, root.focus_force) # fix focus issue
 
+    def relpath(self, path):
+        r = os.path.relpath(path, self.image_directory)
+        if r == ".":
+            r = "\\"
+        return r
+
     def on_dir_change(self, event=None):
         if not self.current_image:
             return
@@ -167,11 +173,7 @@ class ImageCaptionApp:
                     "Please rename first."
                 )
                 # restore
-                old_dir = os.path.dirname(old_image)
-                rel_old = os.path.relpath(old_dir, self.image_directory)
-                if rel_old == ".":
-                    rel_old = "\\"
-                self.dir_entry.set(rel_old)
+                self.dir_entry.set(self.relpath(os.path.dirname(old_image)))
                 return        
 
         new_image = os.path.join(new_dir, base_name)
@@ -191,9 +193,9 @@ class ImageCaptionApp:
         self.current_caption_file = new_txt
         self.image_files[self.image_index] = new_image
 
-        # обновляем в списке файлов
+        # обновляем в списке файлов        
         self.file_list.delete(self.image_index)
-        self.file_list.insert(self.image_index, new_image)
+        self.file_list.insert(self.image_index, self.relpath(new_image))
 
         # оставить фокус на строке
         self.file_list.selection_clear(0, END)
@@ -254,11 +256,7 @@ class ImageCaptionApp:
             self.file_list.selection_set(self.image_index)
             self.file_list.see(self.image_index)  # Scroll to the active file
             
-            current_dir = os.path.dirname(self.current_image)
-            rel_dir = os.path.relpath(current_dir, self.image_directory)
-            if rel_dir == ".":
-                rel_dir = "\\"
-            self.dir_entry.set(rel_dir)
+            self.dir_entry.set(self.relpath(os.path.dirname(self.current_image)))
 
 
     def rename_file(self, event=None):
@@ -321,7 +319,7 @@ class ImageCaptionApp:
 
         self.image_files[self.image_index] = new_image
         self.file_list.delete(self.image_index)
-        self.file_list.insert(self.image_index, new_image)
+        self.file_list.insert(self.image_index, self.relpath(new_image))
 
         self.file_entry.delete(0, END)
         self.file_entry.insert(0, os.path.basename(new_image))
@@ -396,17 +394,14 @@ class ImageCaptionApp:
             
             self.directories = []
             for root, dirs, _ in os.walk(self.image_directory):
-                rel_path = os.path.relpath(root, self.image_directory)
-                if rel_path == ".":
-                    rel_path = "\\"
-                self.directories.append(rel_path)
+                self.directories.append(self.relpath(root))
             self.directories.sort()
             self.dir_entry["values"] = self.directories          
 
             # Populate file_list with the image files
             self.file_list.delete(0, END)
             for file in self.image_files:
-                self.file_list.insert(END, file)            
+                self.file_list.insert(END, self.relpath(file))
 
         if not self.image_files:
             messagebox.showinfo("No Images", "No images found in the selected directory.")
