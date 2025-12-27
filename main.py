@@ -66,7 +66,8 @@ class ImageCaptionApp:
         # --- nav_frame (правая часть, 50%) ---
         nav_frame = Frame(main_frame)
         nav_frame.grid(row=0, column=1, sticky="nsew")
-        nav_frame.grid_rowconfigure(0, weight=1)
+        nav_frame.grid_rowconfigure(0, weight=0)  # filter entry
+        nav_frame.grid_rowconfigure(1, weight=1)  # file list
         nav_frame.grid_columnconfigure(0, weight=1)
         nav_frame.grid_columnconfigure(1, weight=0)
 
@@ -107,6 +108,12 @@ class ImageCaptionApp:
 
         self.text_area = Text(text_frame, wrap=WORD, width=1)
         self.text_area.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+        # Привязываем события для восстановления выделения в списке
+        self.text_area.bind("<Button-1>", lambda e: self.root.after_idle(self.restore_listbox_selection))
+        self.text_area.bind("<ButtonRelease-1>", lambda e: self.root.after_idle(self.restore_listbox_selection))
+        self.text_area.bind("<FocusIn>", lambda e: self.root.after_idle(self.restore_listbox_selection))
+        self.text_area.bind("<KeyPress>", lambda e: self.root.after_idle(self.restore_listbox_selection))
+        self.text_area.bind("<KeyRelease>", lambda e: self.root.after_idle(self.restore_listbox_selection))
 
         trans_frame = Frame(text_frame)
         trans_frame.grid(row=0, column=1, sticky="nsew", padx=2, pady=2)
@@ -122,18 +129,45 @@ class ImageCaptionApp:
 
         self.trans_text_area = Text(trans_frame, wrap=WORD, width=1)
         self.trans_text_area.grid(row=2, column=0, sticky="nsew", padx=2, pady=2)
+        # Привязываем события для восстановления выделения в списке
+        self.trans_text_area.bind("<Button-1>", lambda e: self.root.after_idle(self.restore_listbox_selection))
+        self.trans_text_area.bind("<ButtonRelease-1>", lambda e: self.root.after_idle(self.restore_listbox_selection))
+        self.trans_text_area.bind("<FocusIn>", lambda e: self.root.after_idle(self.restore_listbox_selection))
+        self.trans_text_area.bind("<KeyPress>", lambda e: self.root.after_idle(self.restore_listbox_selection))
+        
+        # Также привязываем к text_lang
+        self.text_lang.bind("<Button-1>", lambda e: self.root.after_idle(self.restore_listbox_selection))
+        self.text_lang.bind("<FocusIn>", lambda e: self.root.after_idle(self.restore_listbox_selection))
 
         # --- nav_frame ---
+        # Filter entry
+        filter_frame = Frame(nav_frame)
+        filter_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=2, pady=2)
+        filter_frame.grid_columnconfigure(0, weight=1)
+        
+        Label(filter_frame, text="Filter:").pack(side=LEFT, padx=(0, 2))
+        self.filter_entry = Entry(filter_frame)
+        self.filter_entry.pack(side=LEFT, fill=X, expand=True, padx=2)
+        self.filter_entry.bind("<Return>", self.filter_files)
+        Hovertip(self.filter_entry, text="Enter search text and press Enter to filter by caption content")
+        
+        self.clear_filter_button = Button(filter_frame, text="Clear", command=self.clear_filter)
+        self.clear_filter_button.pack(side=LEFT, padx=2)
+        
+        # File list
         self.file_list = Listbox(nav_frame)
-        self.file_list.grid(row=0, column=0, sticky="nsew", padx=(2,0), pady=2)
+        self.file_list.grid(row=1, column=0, sticky="nsew", padx=(2,0), pady=2)
         self.file_list.bind('<<ListboxSelect>>', self.on_file_select)
+        # Восстанавливаем выделение при потере фокуса списка (если оно было сброшено)
+        self.file_list.bind("<FocusOut>", lambda e: self.root.after_idle(self.restore_listbox_selection))
 
         self.scrollbar = Scrollbar(nav_frame, orient=VERTICAL, command=self.file_list.yview, width=18)
-        self.scrollbar.grid(row=0, column=1, sticky="ns", padx=(0,2), pady=2)
+        self.scrollbar.grid(row=1, column=1, sticky="ns", padx=(0,2), pady=2)
         self.file_list.config(yscrollcommand=self.scrollbar.set)
 
         self.image_index = 0
         self.image_files = []
+        self.all_image_files = []  # хранит все файлы для фильтрации
         self.current_image = None
         self.current_caption_file = None
         self.original_image = None
@@ -196,6 +230,11 @@ class ImageCaptionApp:
         self.current_image = new_image
         self.current_caption_file = new_txt
         self.image_files[self.image_index] = new_image
+        
+        # Обновляем также в полном списке файлов
+        if old_image in self.all_image_files:
+            idx = self.all_image_files.index(old_image)
+            self.all_image_files[idx] = new_image
 
         # обновляем в списке файлов        
         self.file_list.delete(self.image_index)
@@ -262,6 +301,12 @@ class ImageCaptionApp:
             
             self.dir_entry.set(self.relpath(os.path.dirname(self.current_image)))
 
+    def restore_listbox_selection(self):
+        """Восстанавливает выделение текущего элемента в списке файлов"""
+        if self.image_files and 0 <= self.image_index < len(self.image_files):
+            self.file_list.selection_clear(0, END)
+            self.file_list.selection_set(self.image_index)
+            self.file_list.see(self.image_index)
 
     def rename_file(self, event=None):
         if not self.current_image:
@@ -322,6 +367,12 @@ class ImageCaptionApp:
         self.current_caption_file = new_txt
 
         self.image_files[self.image_index] = new_image
+        
+        # Обновляем также в полном списке файлов
+        if old_image in self.all_image_files:
+            idx = self.all_image_files.index(old_image)
+            self.all_image_files[idx] = new_image
+            
         self.file_list.delete(self.image_index)
         self.file_list.insert(self.image_index, self.relpath(new_image))
 
@@ -383,6 +434,71 @@ class ImageCaptionApp:
         self.load_images()
         self.image_index = 0
         self.display_image()
+        self.filter_entry.delete(0, END)  # очищаем фильтр при открытии новой папки
+
+    def filter_files(self, event=None):
+        filter_text = self.filter_entry.get().strip().lower()
+        
+        if not filter_text:
+            self.clear_filter()
+            return
+        
+        # Фильтруем файлы по содержимому подписей
+        filtered_files = []
+        for image_path in self.all_image_files:
+            caption_file = os.path.splitext(image_path)[0] + '.txt'
+            try:
+                if os.path.exists(caption_file):
+                    with open(caption_file, 'r', encoding='utf-8') as f:
+                        caption_content = f.read().lower()
+                        if filter_text in caption_content:
+                            filtered_files.append(image_path)
+            except Exception:
+                # Если не удалось прочитать файл, пропускаем
+                pass
+        
+        # Обновляем список файлов
+        self.image_files = filtered_files
+        
+        # Обновляем отображение списка
+        self.file_list.delete(0, END)
+        for file in self.image_files:
+            self.file_list.insert(END, self.relpath(file))
+        
+        # Обновляем индекс и отображение текущего изображения
+        if self.image_files:
+            # Пытаемся сохранить текущий файл, если он есть в отфильтрованном списке
+            if self.current_image and self.current_image in self.image_files:
+                self.image_index = self.image_files.index(self.current_image)
+            else:
+                self.image_index = 0
+            self.display_image()
+        else:
+            # Нет файлов, соответствующих фильтру
+            self.current_image = None
+            self.current_caption_file = None
+            self.original_image = None
+            self.image_label.config(image='')
+            self.text_area.delete(1.0, END)
+            self.file_entry.delete(0, END)
+            self.index_label.config(text="0 of 0")
+
+    def clear_filter(self):
+        self.filter_entry.delete(0, END)
+        self.image_files = self.all_image_files.copy()
+        
+        # Обновляем отображение списка
+        self.file_list.delete(0, END)
+        for file in self.image_files:
+            self.file_list.insert(END, self.relpath(file))
+        
+        # Обновляем индекс и отображение
+        if self.image_files:
+            if self.current_image and self.current_image in self.image_files:
+                self.image_index = self.image_files.index(self.current_image)
+            else:
+                self.image_index = 0
+            self.display_image()
 
     def load_images(self):
         directory = filedialog.askdirectory(title="Select Image Directory")
@@ -394,6 +510,7 @@ class ImageCaptionApp:
                     if file.lower().endswith(('.png', '.jpg', '.jpeg')):
                         self.image_files.append(os.path.join(root, file))
             self.image_files.sort()
+            self.all_image_files = self.image_files.copy()  # сохраняем все файлы для фильтрации
             self.image_directory = directory
             
             self.directories = []
@@ -464,7 +581,11 @@ class ImageCaptionApp:
             messagebox.showerror("Delete Error", f"Could not delete caption file:\n{e}")
             return
         
-        self.image_files.pop(current_idx)
+        deleted_file = self.image_files.pop(current_idx)
+        
+        # Удаляем также из полного списка файлов
+        if deleted_file in self.all_image_files:
+            self.all_image_files.remove(deleted_file)
         
         self.file_list.delete(current_idx)
         
