@@ -9,6 +9,8 @@
 - Find and replace text in all files.
 - Rename filenames.
 - Moving image+caption between directories.
+- Delete image+caption.
+- Filter image list by substring in captions.
 
 ## Install:
 1. Clone the repository or download the source code.
