@@ -39,6 +39,10 @@ class ImageCaptionApp:
         Hovertip(self.cancel_button, text="Return to original prompt")
         self.cancel_button.pack(side=LEFT, padx=2, pady=2)
 
+        self.delete_button = Button(b_frame, text="Delete", command=self.delete_current_image)
+        Hovertip(self.delete_button, text="Delete current image and caption file")
+        self.delete_button.pack(side=LEFT, padx=2, pady=2)
+
         main_frame = Frame(container)
         main_frame.grid(row=1, column=0, sticky="nsew")
         
@@ -426,6 +430,66 @@ class ImageCaptionApp:
             caption = self.text_area.get(1.0, END).strip()
             with open(self.current_caption_file, 'w', encoding='utf-8') as f:
                 f.write(caption)
+
+    def delete_current_image(self):
+        if not self.current_image or not self.image_files:
+            return
+        
+        # Confirmation dialog
+        confirm = messagebox.askyesno(
+            "Confirm Delete",
+            f"Are you sure you want to delete:\n{os.path.basename(self.current_image)}\n\nThis will permanently delete the image and caption file.",
+            icon='warning'
+        )
+        
+        if not confirm:
+            return
+        
+        # Get current index before deletion
+        current_idx = self.image_index
+        
+        # Delete image file
+        try:
+            if os.path.exists(self.current_image):
+                os.remove(self.current_image)
+        except Exception as e:
+            messagebox.showerror("Delete Error", f"Could not delete image file:\n{e}")
+            return
+        
+        # Delete caption file
+        try:
+            if self.current_caption_file and os.path.exists(self.current_caption_file):
+                os.remove(self.current_caption_file)
+        except Exception as e:
+            messagebox.showerror("Delete Error", f"Could not delete caption file:\n{e}")
+            return
+        
+        self.image_files.pop(current_idx)
+        
+        self.file_list.delete(current_idx)
+        
+        # Update image_index and display
+        if not self.image_files:
+            # No more images
+            self.current_image = None
+            self.current_caption_file = None
+            self.original_image = None
+            self.image_label.config(image='')
+            self.text_area.delete(1.0, END)
+            self.file_entry.delete(0, END)
+            self.index_label.config(text="0 of 0")
+            messagebox.showinfo("All Deleted", "All images have been deleted.")
+            return
+        
+        # Adjust index - if we deleted the last item, go to previous
+        if current_idx >= len(self.image_files):
+            self.image_index = len(self.image_files) - 1
+        # Otherwise, index automatically points to the next item (which became current_idx)
+        else:
+            self.image_index = current_idx
+        
+        # Display the new current image
+        self.display_image()
 
     # step or index
     def select_image(self, step=0, index=None):
