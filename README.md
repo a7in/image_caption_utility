@@ -11,11 +11,13 @@
 - Moving image+caption between directories.
 - Delete image+caption.
 - Filter image list by substring in captions.
+- List and thumbnail view modes with keyboard navigation.
+- Thumbnail cache stored in SQLite (auto-generated, invalidated on file changes).
 
 ## Install:
 1. Clone the repository or download the source code.
 2. Navigate to the project directory.
-3. install the required libraries using the following command:
+3. Install the required libraries using the following command:
   ```bash
   pip install -r requirements.txt
   ```
