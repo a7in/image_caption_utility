@@ -31,7 +31,7 @@ class ImageCaptionApp:
         self._thumb_built  = False   # True after first thumb-mode activation
         self._thumb_cols   = 0
 
-        # In-memory image list (list of abs paths, ordered by rel_path)
+        # In-memory image list (list of rel paths, ordered by rel_path)
         self.image_files:     list[str] = []   # current (possibly filtered)
         self.all_image_files: list[str] = []   # full unfiltered list
         self.image_directory: str = ""
@@ -44,7 +44,7 @@ class ImageCaptionApp:
 
         # PhotoImage refs keyed by rel_path (prevent GC)
         self._thumb_photos: dict[str, ImageTk.PhotoImage] = {}
-        # cell widget info keyed by abs_path
+        # cell widget info keyed by rel_path
         self._thumb_widgets: dict[str, dict] = {}
 
         self.view_mode = "list"
@@ -74,7 +74,6 @@ class ImageCaptionApp:
 
         for text, cmd, tip in [
             ("Reopen folder",  self.open_folder,          None),
-            ("Search empty",   self.search_empty_caption, None),
             ("Find-Replace",   self.open_find_replace,    None),
             ("Save",           self.save_caption,         "Save current edited prompt"),
             ("Cancel",         self.load_caption,         "Return to original prompt"),
@@ -181,6 +180,8 @@ class ImageCaptionApp:
         self.filter_entry.bind("<Return>", self.filter_files)
         Hovertip(self.filter_entry, text="Enter text and press Enter to filter by caption content")
         Button(filter_frame, text="Clear", command=self.clear_filter).pack(side=LEFT, padx=2)
+        self.show_empty_var = BooleanVar()
+        Checkbutton(filter_frame, text="Show empty", variable=self.show_empty_var, command=self.filter_files).pack(side=LEFT, padx=2)
 
         # mode toggle bar
         mode_frame = Frame(nav_frame)
@@ -288,13 +289,12 @@ class ImageCaptionApp:
 
         # load already-cached thumbs instantly, queue the rest
         pending = []
-        for ap in self.image_files:
-            rp = self.db._rel(ap)
+        for rp in self.image_files:
             jpeg = self.db.get_thumb(rp)
             if jpeg:
-                self._apply_jpeg(ap, jpeg)
+                self._apply_jpeg(rp, jpeg)
             else:
-                pending.append((rp, ap))
+                pending.append(rp)
 
         if pending:
             self._start_thumb_worker(pending)
@@ -310,7 +310,7 @@ class ImageCaptionApp:
 
     def _place_placeholders(self):
         cols = self._thumb_cols
-        for idx, ap in enumerate(self.image_files):
+        for idx, rp in enumerate(self.image_files):
             row, col = divmod(idx, cols)
             cf = Frame(self.thumb_inner, bg="#2b2b2b",
                        width=CELL_SIZE, height=CELL_SIZE + LABEL_HEIGHT + 2)
@@ -322,10 +322,9 @@ class ImageCaptionApp:
             ph.place(x=THUMB_PAD, y=THUMB_PAD)
 
             # label row
-            rp = self.db._rel(ap)
             row_info = self.db.get_by_rel(rp)
             has_cap = row_info["has_caption"] if row_info else 0
-            name = _short_name(os.path.basename(ap), CELL_SIZE)
+            name = _short_name(os.path.basename(rp), CELL_SIZE)
 
             lf = Frame(cf, bg="#2b2b2b")
             lf.place(x=0, y=CELL_SIZE, width=CELL_SIZE, height=LABEL_HEIGHT + 2)
@@ -335,11 +334,11 @@ class ImageCaptionApp:
             lbl.pack(side=LEFT, fill=X, expand=True)
 
             for w in (cf, ph, lf, dot, lbl):
-                w.bind("<Button-1>", lambda e, ap=ap: self._on_thumb_click_by_path(ap))
+                w.bind("<Button-1>", lambda e, rp=rp: self._on_thumb_click_by_path(rp))
             self._bind_scroll(cf)
 
-            self._thumb_widgets[ap] = {"frame": cf, "placeholder": ph,
-                                       "img_lbl": None, "dot": dot}
+            self._thumb_widgets[rp] = {"frame": cf, "placeholder": ph,
+                                       "img_lbl": None, "dot": dot, "name_lbl": lbl}
 
         self._highlight_current_thumb()
 
@@ -357,7 +356,7 @@ class ImageCaptionApp:
                 self.thumb_progress_bar.pack(side=LEFT, padx=(6, 2))
                 self.thumb_progress_label.pack(side=LEFT, padx=(0, 4))
 
-    def _start_thumb_worker(self, pending: list[tuple[str, str]]):
+    def _start_thumb_worker(self, pending: list[str]):
         self._set_progress(0, len(pending))
         self._thumb_worker = ThumbWorker(self.db, self._thumb_queue)
         self._thumb_worker.start(pending)
@@ -384,18 +383,17 @@ class ImageCaptionApp:
                 self._set_progress(0, 0)
                 return
             if kind == "thumb" and rel_path:
-                ap = self.db._abs(rel_path)
                 if jpeg_bytes:
-                    self._apply_jpeg(ap, jpeg_bytes)
+                    self._apply_jpeg(rel_path, jpeg_bytes)
                 self._set_progress(done, total)
             processed += 1
 
         self.root.after(30, self._poll_thumb_queue)
 
-    def _apply_jpeg(self, abs_path: str, jpeg_bytes: bytes):
-        if abs_path not in self._thumb_widgets:
+    def _apply_jpeg(self, rp: str, jpeg_bytes: bytes):
+        if rp not in self._thumb_widgets:
             return
-        info = self._thumb_widgets[abs_path]
+        info = self._thumb_widgets[rp]
         cf = info["frame"]
 
         try:
@@ -404,7 +402,6 @@ class ImageCaptionApp:
             return
 
         photo = ImageTk.PhotoImage(pil)
-        rp = self.db._rel(abs_path)
         self._thumb_photos[rp] = photo   # prevent GC
 
         ph = info.get("placeholder")
@@ -421,7 +418,7 @@ class ImageCaptionApp:
         img_lbl = Label(cf, image=photo, bg="#2b2b2b", cursor="hand2")
         img_lbl.place(x=x, y=y)
 
-        img_lbl.bind("<Button-1>", lambda e, ap=abs_path: self._on_thumb_click_by_path(ap))
+        img_lbl.bind("<Button-1>", lambda e, rpath=rp: self._on_thumb_click_by_path(rpath))
         self._bind_scroll(img_lbl)
         info["img_lbl"] = img_lbl
 
@@ -481,25 +478,39 @@ class ImageCaptionApp:
                 r, c = divmod(idx, cols)
                 info["frame"].grid(row=r, column=c)
 
-    def _remove_thumb_cell(self, abs_path: str):
-        info = self._thumb_widgets.pop(abs_path, None)
+    def _remove_thumb_cell(self, rp: str):
+        info = self._thumb_widgets.pop(rp, None)
         if info:
             info["frame"].destroy()
-        rp = self.db._rel(abs_path)
         self._thumb_photos.pop(rp, None)
         self._reflow_thumb_grid()
 
-    def _refresh_dot(self, abs_path: str):
-        info = self._thumb_widgets.get(abs_path)
+    def _refresh_dot(self, rp: str):
+        info = self._thumb_widgets.get(rp)
         if not info:
             return
-        rp = self.db._rel(abs_path)
         row = self.db.get_by_rel(rp)
         has = row["has_caption"] if row else 0
         try:
             info["dot"].config(fg=_dot_color(has))
         except Exception:
             pass
+
+    def _update_thumb_label(self, rp: str):
+        info = self._thumb_widgets.get(rp)
+        if not info or "name_lbl" not in info:
+            return
+        name = _short_name(os.path.basename(rp), CELL_SIZE)
+        try:
+            info["name_lbl"].config(text=name)
+        except Exception:
+            pass
+
+    def _rebind_thumb_click(self, widget, rp: str):
+        """Recursively re-bind click event to use the updated path."""
+        widget.bind("<Button-1>", lambda e, rpath=rp: self._on_thumb_click_by_path(rpath))
+        for child in widget.winfo_children():
+            self._rebind_thumb_click(child, rp)
 
     def _bind_scroll(self, widget):
         """Recursively bind mouse-wheel events to widget and all children."""
@@ -514,10 +525,10 @@ class ImageCaptionApp:
         self.thumb_canvas.focus_set()
         self._highlight_current_thumb()
 
-    def _on_thumb_click_by_path(self, abs_path: str):
+    def _on_thumb_click_by_path(self, rp: str):
         """Click handler that resolves index at call time — survives deletions/reorders."""
         try:
-            idx = self.image_files.index(abs_path)
+            idx = self.image_files.index(rp)
         except ValueError:
             return
         self._on_thumb_click(idx)
@@ -577,13 +588,13 @@ class ImageCaptionApp:
     def _rebuild_file_list(self):
         """Repopulate Listbox from self.image_files."""
         self.file_list.delete(0, END)
-        for ap in self.image_files:
-            self.file_list.insert(END, self._reldisp(ap))
+        for rp in self.image_files:
+            self.file_list.insert(END, self._reldisp(rp))
 
-    def _reldisp(self, abs_path: str) -> str:
-        """Relative path for display in Listbox (backslash, root = \\)."""
-        r = os.path.relpath(abs_path, self.image_directory)
-        return r if r != "." else "\\"
+    def _reldisp(self, rp: str) -> str:
+        """Relative path for display in Listbox (backslash, root = \)."""
+        if not rp or rp == ".": return "\\"
+        return rp.replace("/", "\\")
 
     # ==================================================================
     # Image display
@@ -593,7 +604,8 @@ class ImageCaptionApp:
         if not self.image_files:
             return
         self.index_label.config(text=f"{self.image_index + 1} of {len(self.image_files)}")
-        abs_path = self.image_files[self.image_index]
+        rp = self.image_files[self.image_index]
+        abs_path = self.db._abs(rp)
         self.current_caption_file = os.path.splitext(abs_path)[0] + ".txt"
 
         try:
@@ -604,10 +616,17 @@ class ImageCaptionApp:
             return
 
         self.file_entry.delete(0, END)
-        self.file_entry.insert(0, os.path.basename(abs_path))
-        self.current_image = abs_path
+        self.file_entry.insert(0, os.path.basename(rp))
+        self.current_image = rp
+        dname = os.path.dirname(rp)
+        self.dir_entry.set(self._reldisp(dname) if dname else "\\")
 
-        self.load_caption()
+        self.text_area.delete("1.0", END)
+        if os.path.exists(self.current_caption_file):
+            with open(self.current_caption_file, "r", encoding="utf-8") as f:
+                self.text_area.insert("1.0", f.read())
+
+        self._highlight_current_thumb()
 
         self.file_list.selection_clear(0, END)
         self.file_list.selection_set(self.image_index)
@@ -616,7 +635,6 @@ class ImageCaptionApp:
         if self.view_mode == "thumbs":
             self._highlight_current_thumb()
 
-        self.dir_entry.set(self._reldisp(os.path.dirname(abs_path)))
 
     def restore_listbox_selection(self):
         if self.image_files and 0 <= self.image_index < len(self.image_files):
@@ -658,12 +676,11 @@ class ImageCaptionApp:
     def save_caption(self):
         if not self.current_caption_file:
             return
-        caption = self.text_area.get(1.0, END).strip()
+        caption = self.text_area.get("1.0", "end-1c")
         with open(self.current_caption_file, "w", encoding="utf-8") as f:
             f.write(caption)
         if self.current_image:
-            rp = self.db._rel(self.current_image)
-            self.db.update_caption(rp, caption)
+            self.db.update_caption(self.current_image, caption.strip())
             self._refresh_dot(self.current_image)
 
     # ==================================================================
@@ -688,32 +705,22 @@ class ImageCaptionApp:
         except IndexError:
             pass
 
-    def search_empty_caption(self):
-        start = self.image_index
-        while True:
-            self.image_index = (self.image_index + 1) % len(self.image_files)
-            self.display_image()
-            if self.text_area.get(1.0, END).strip() == "":
-                return
-            if self.image_index == start:
-                messagebox.showinfo("Not found", "No image with an empty or missing caption found.")
-                break
-
     # ==================================================================
     # Filter
     # ==================================================================
 
     def filter_files(self, event=None):
         text = self.filter_entry.get().strip()
-        if not text:
+        show_empty = self.show_empty_var.get()
+        if not text and not show_empty:
             self.clear_filter()
             return
 
-        rows = self.db.get_all(filter_text=text)
+        rows = self.db.get_all(filter_text=text, show_empty=show_empty)
         rp_set = {r["rel_path"] for r in rows}
-        self.image_files = [ap for ap in self.all_image_files
-                            if self.db._rel(ap) in rp_set]
-
+        self.image_files = [rp for rp in self.all_image_files
+                            if rp in rp_set]
+        self.image_index = 0
         self._rebuild_file_list()
         self._resolve_index_after_filter()
 
@@ -722,6 +729,7 @@ class ImageCaptionApp:
 
     def clear_filter(self):
         self.filter_entry.delete(0, END)
+        self.show_empty_var.set(False)
         self.image_files = list(self.all_image_files)
         self._rebuild_file_list()
         self._resolve_index_after_filter()
@@ -774,11 +782,11 @@ class ImageCaptionApp:
 
         # open DB and sync
         self.db.open(directory)
-        self.db.sync(found)
+        synced_rps = self.db.sync(found)
 
         self.image_directory = directory
-        self.all_image_files = found
-        self.image_files     = list(found)
+        self.all_image_files = synced_rps
+        self.image_files     = list(synced_rps)
         self.image_index     = 0
 
         # populate directories combobox
@@ -812,11 +820,11 @@ class ImageCaptionApp:
     def rename_file(self, event=None):
         if not self.current_image:
             return
-        old_ap  = self.current_image
+        old_rp  = self.current_image
+        old_ap  = self.db._abs(old_rp)
         old_txt = self.current_caption_file
-        old_rp  = self.db._rel(old_ap)
         directory = os.path.dirname(old_ap)
-        old_base  = os.path.basename(old_ap)
+        old_base  = os.path.basename(old_rp)
         new_base  = self.file_entry.get().strip()
 
         if not new_base:
@@ -854,22 +862,24 @@ class ImageCaptionApp:
             return
 
         new_rp = self.db._rel(new_ap)
-        self.db.rename(old_rp, new_rp, new_ap)
+        self.db.rename(old_rp, new_rp)
 
-        self._update_path_in_lists(old_ap, new_ap)
-        self.current_image        = new_ap
+        self._update_path_in_lists(old_rp, new_rp)
+        self.current_image        = new_rp
         self.current_caption_file = new_txt
 
         self.file_entry.delete(0, END)
-        self.file_entry.insert(0, os.path.basename(new_ap))
+        self.file_entry.insert(0, os.path.basename(new_rp))
         self._rebuild_file_list()
         self.file_list.selection_clear(0, END)
         self.file_list.selection_set(self.image_index)
         self.file_list.see(self.image_index)
         self.file_entry.focus_set()
 
-        if old_ap in self._thumb_widgets:
-            self._thumb_widgets[new_ap] = self._thumb_widgets.pop(old_ap)
+        if old_rp in self._thumb_widgets:
+            self._thumb_widgets[new_rp] = self._thumb_widgets.pop(old_rp)
+            self._update_thumb_label(new_rp)
+            self._rebind_thumb_click(self._thumb_widgets[new_rp]["frame"], new_rp)
         if old_rp in self._thumb_photos:
             self._thumb_photos[new_rp] = self._thumb_photos.pop(old_rp)
 
@@ -882,18 +892,18 @@ class ImageCaptionApp:
         if not os.path.isdir(new_dir):
             return
 
-        old_ap   = self.current_image
+        old_rp   = self.current_image
+        old_ap   = self.db._abs(old_rp)
         old_txt  = self.current_caption_file
-        old_rp   = self.db._rel(old_ap)
-        base     = os.path.basename(old_ap)
+        base     = os.path.basename(old_rp)
         stem     = os.path.splitext(base)[0].lower()
-
         for f in os.listdir(new_dir):
             fs, fe = os.path.splitext(f)
             if fs.lower() == stem and fe.lower() in (".png", ".jpg", ".jpeg", ".webp"):
                 messagebox.showerror("Move error",
                     f"File '{fs}{fe}' already exists in destination. Rename first.")
-                self.dir_entry.set(self._reldisp(os.path.dirname(old_ap)))
+                db_dir = os.path.dirname(old_rp)
+                self.dir_entry.set(self._reldisp(db_dir) if db_dir else "\\")
                 return
 
         new_ap  = os.path.join(new_dir, base)
@@ -906,35 +916,38 @@ class ImageCaptionApp:
                 os.rename(old_txt, new_txt)
         except Exception as e:
             messagebox.showerror("Move error", str(e))
-            self.dir_entry.set(self._reldisp(os.path.dirname(old_ap)))
+            db_dir = os.path.dirname(old_rp)
+            self.dir_entry.set(self._reldisp(db_dir) if db_dir else "\\")
             return
 
-        self.db.rename(old_rp, new_rp, new_ap)
-        self._update_path_in_lists(old_ap, new_ap)
-        self.current_image        = new_ap
+        self.db.rename(old_rp, new_rp)
+        self._update_path_in_lists(old_rp, new_rp)
+        self.current_image        = new_rp
         self.current_caption_file = new_txt
 
         self.file_entry.delete(0, END)
-        self.file_entry.insert(0, os.path.basename(new_ap))
+        self.file_entry.insert(0, os.path.basename(new_rp))
         self._rebuild_file_list()
         self.file_list.selection_clear(0, END)
         self.file_list.selection_set(self.image_index)
         self.file_list.see(self.image_index)
 
-        if old_ap in self._thumb_widgets:
-            self._thumb_widgets[new_ap] = self._thumb_widgets.pop(old_ap)
+        if old_rp in self._thumb_widgets:
+            self._thumb_widgets[new_rp] = self._thumb_widgets.pop(old_rp)
+            self._update_thumb_label(new_rp)
+            self._rebind_thumb_click(self._thumb_widgets[new_rp]["frame"], new_rp)
         if old_rp in self._thumb_photos:
             self._thumb_photos[new_rp] = self._thumb_photos.pop(old_rp)
 
         self.dir_entry.set(self._reldisp(new_dir))
-
-    def _update_path_in_lists(self, old_ap: str, new_ap: str):
-        if old_ap in self.image_files:
-            idx = self.image_files.index(old_ap)
-            self.image_files[idx] = new_ap
-        if old_ap in self.all_image_files:
-            idx = self.all_image_files.index(old_ap)
-            self.all_image_files[idx] = new_ap
+        
+    def _update_path_in_lists(self, old_rp: str, new_rp: str):
+        if old_rp in self.image_files:
+            idx = self.image_files.index(old_rp)
+            self.image_files[idx] = new_rp
+        if old_rp in self.all_image_files:
+            idx = self.all_image_files.index(old_rp)
+            self.all_image_files[idx] = new_rp
 
     # ==================================================================
     # Delete
@@ -949,8 +962,9 @@ class ImageCaptionApp:
             return
 
         cur_idx  = self.image_index
-        del_path = self.current_image
-        del_rp   = self.db._rel(del_path)
+        del_rp   = self.current_image
+        del_path = self.db._abs(del_rp)
+        del_txt  = os.path.splitext(del_path)[0] + ".txt"
 
         try:
             if os.path.exists(del_path):
@@ -959,20 +973,21 @@ class ImageCaptionApp:
             messagebox.showerror("Delete Error", str(e))
             return
         try:
-            if self.current_caption_file and os.path.exists(self.current_caption_file):
-                os.remove(self.current_caption_file)
+            if del_txt and os.path.exists(del_txt):
+                os.remove(del_txt)
         except Exception as e:
             messagebox.showerror("Delete Error", str(e))
             return
 
         self.db.delete(del_rp)
 
+        # remove from lists
         self.image_files.pop(cur_idx)
-        if del_path in self.all_image_files:
-            self.all_image_files.remove(del_path)
+        if del_rp in self.all_image_files:
+            self.all_image_files.remove(del_rp)
 
         self.file_list.delete(cur_idx)
-        self._remove_thumb_cell(del_path)
+        self._remove_thumb_cell(del_rp)
 
         if not self.image_files:
             self.current_image = None
@@ -1001,8 +1016,8 @@ class ImageCaptionApp:
                 return
             btn.config(state=DISABLED)
             count = 0
-            updated_rps = []
-            for ap in self.image_files:
+            for rp in self.image_files:
+                ap = self.db._abs(rp)
                 cap_file = os.path.splitext(ap)[0] + ".txt"
                 if os.path.exists(cap_file):
                     with open(cap_file, "r", encoding="utf-8") as f:
@@ -1012,11 +1027,10 @@ class ImageCaptionApp:
                         count += content.count(find_text)
                         with open(cap_file, "w", encoding="utf-8") as f:
                             f.write(new_content)
-                        rp = self.db._rel(ap)
                         self.db.update_caption(rp, new_content)
-                        self._refresh_dot(ap)
-                        updated_rps.append(rp)
-            messagebox.showinfo("Done", f"Replaced: {count}")
+                        self._refresh_dot(rp)
+
+            messagebox.showinfo("Result", f"Replaced {count} instances.")
 
         win = Toplevel(self.root)
         win.title("Find and Replace")
@@ -1058,13 +1072,14 @@ class ImageCaptionApp:
     def open_image(self, event):
         if not self.current_image:
             return
+        ap = self.db._abs(self.current_image)
         try:
             if platform.system() == "Windows":
-                os.startfile(self.current_image)
+                os.startfile(ap)
             elif platform.system() == "Darwin":
-                subprocess.call(("open", self.current_image))
+                subprocess.call(("open", ap))
             else:
-                subprocess.call(("xdg-open", self.current_image))
+                subprocess.call(("xdg-open", ap))
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
