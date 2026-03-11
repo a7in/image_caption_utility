@@ -8,11 +8,11 @@ from idlelib.tooltip import Hovertip
 from PIL import Image, ImageTk
 import subprocess
 import platform
-from googletrans import Translator
+from deep_translator import GoogleTranslator
 
 from db import ImageDB, ThumbWorker, THUMB_SIZE
 
-translator = Translator()
+
 
 THUMB_PAD    = 6
 LABEL_HEIGHT = 18   # px for filename label row under each thumb cell
@@ -1034,11 +1034,22 @@ class ImageCaptionApp:
     # ==================================================================
 
     def translate_text(self):
-        if not self.text_area.get(1.0, END).rstrip().endswith(","):
-            self.text_area.insert(END, ",")
         s = self.trans_text_area.get(1.0, END).strip()
-        t = " " + translator.translate(s, src="ru", dest="en").text.strip()
-        self.text_area.insert(END, t)
+        if not s:
+            return
+
+        # Add comma if needed
+        current_text = self.text_area.get(1.0, END).rstrip()
+        if current_text and not current_text.endswith(","):
+            self.text_area.insert(END, ",")
+
+        src_lang = self.text_lang.get(1.0, END).strip() or "ru"
+        try:
+            translated = GoogleTranslator(source=src_lang, target='en').translate(s)
+            t = " " + translated.strip()
+            self.text_area.insert(END, t)
+        except Exception as e:
+            messagebox.showerror("Translation Error", str(e))
 
     # ==================================================================
     # Open in external viewer
