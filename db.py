@@ -4,7 +4,6 @@ db.py — Database layer for ImageCaptionApp.
 Schema (table: images):
     id           INTEGER PRIMARY KEY AUTOINCREMENT
     rel_path     TEXT UNIQUE NOT NULL   -- relative to image_directory (as shown in listbox)
-    abs_path     TEXT NOT NULL
     mtime        REAL NOT NULL          -- os.path.getmtime at last sync
     has_caption  INTEGER NOT NULL DEFAULT 0
     caption_text TEXT NOT NULL DEFAULT ''
@@ -65,7 +64,6 @@ class ImageDB:
                 CREATE TABLE IF NOT EXISTS images (
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
                     rel_path     TEXT UNIQUE NOT NULL,
-                    abs_path     TEXT NOT NULL,
                     mtime        REAL NOT NULL,
                     has_caption  INTEGER NOT NULL DEFAULT 0,
                     caption_text TEXT NOT NULL DEFAULT '',
@@ -123,13 +121,13 @@ class ImageDB:
                 except OSError:
                     mtime = 0.0
                 cap_text, has_cap = self._read_caption(ap)
-                rows_to_insert.append((rp, ap, mtime, has_cap, cap_text))
+                rows_to_insert.append((rp, mtime, has_cap, cap_text))
 
             if rows_to_insert:
                 self._conn.executemany(
                     """INSERT OR IGNORE INTO images
-                       (rel_path, abs_path, mtime, has_caption, caption_text, thumb)
-                       VALUES (?, ?, ?, ?, ?, NULL)""",
+                       (rel_path, mtime, has_caption, caption_text, thumb)
+                       VALUES (?, ?, ?, ?, NULL)""",
                     rows_to_insert
                 )
 
@@ -155,23 +153,23 @@ class ImageDB:
     # Query
     # ------------------------------------------------------------------
 
-    def get_all(self, filter_text: str = "") -> list[sqlite3.Row]:
+    def get_all(self, filter_text: str = "", show_empty: bool = False) -> list[sqlite3.Row]:
         """Return all rows matching *filter_text* in caption_text or rel_path."""
         with self._lock:
-            if filter_text:
+            base_query = "SELECT id, rel_path, has_caption, caption_text FROM images"
+            where_clause = ""
+            params = ()
+            
+            if show_empty:
+                where_clause = " WHERE has_caption = 0 OR caption_text = ''"
+            elif filter_text:
+                where_clause = " WHERE caption_text LIKE ? OR rel_path LIKE ?"
                 pattern = f"%{filter_text}%"
-                cur = self._conn.execute(
-                    """SELECT id, rel_path, abs_path, has_caption, caption_text
-                       FROM images
-                       WHERE caption_text LIKE ? OR rel_path LIKE ?
-                       ORDER BY rel_path""",
-                    (pattern, pattern)
-                )
-            else:
-                cur = self._conn.execute(
-                    """SELECT id, rel_path, abs_path, has_caption, caption_text
-                       FROM images ORDER BY rel_path"""
-                )
+                params = (pattern, pattern)
+                
+            query = f"{base_query}{where_clause} ORDER BY rel_path"
+            
+            cur = self._conn.execute(query, params)
             return cur.fetchall()
 
     def get_by_rel(self, rel_path: str) -> sqlite3.Row | None:
@@ -190,13 +188,13 @@ class ImageDB:
             row = cur.fetchone()
             return row["thumb"] if row else None
 
-    def get_pending_thumbs(self) -> list[tuple[str, str]]:
-        """Return (rel_path, abs_path) for rows where thumb IS NULL."""
+    def get_pending_thumbs(self) -> list[str]:
+        """Return list of rel_paths where thumb IS NULL."""
         with self._lock:
             cur = self._conn.execute(
-                "SELECT rel_path, abs_path FROM images WHERE thumb IS NULL ORDER BY rel_path"
+                "SELECT rel_path FROM images WHERE thumb IS NULL ORDER BY rel_path"
             )
-            return [(r["rel_path"], r["abs_path"]) for r in cur.fetchall()]
+            return [r["rel_path"] for r in cur.fetchall()]
 
     # ------------------------------------------------------------------
     # Update caption
@@ -251,14 +249,14 @@ class ImageDB:
     # Rename / move
     # ------------------------------------------------------------------
 
-    def rename(self, old_rel: str, new_rel: str, new_abs: str):
+    def rename(self, old_rel: str, new_rel: str):
         """
-        Update rel_path and abs_path keeping all other fields (including thumb).
+        Update rel_path keeping all other fields (including thumb).
         """
         with self._lock:
             self._conn.execute(
-                "UPDATE images SET rel_path=?, abs_path=? WHERE rel_path=?",
-                (new_rel, new_abs, old_rel)
+                "UPDATE images SET rel_path=? WHERE rel_path=?",
+                (new_rel, old_rel)
             )
             self._conn.commit()
 
@@ -307,8 +305,8 @@ class ThumbWorker:
     via a queue.  UI polls with root.after().
 
     Usage:
-        worker = ThumbWorker(db, on_done_callback)
-        worker.start(pending_list)   # list of (rel_path, abs_path)
+        worker = ThumbWorker(db, result_queue)
+        worker.start(pending_rel_paths)   # list of rel_paths
         worker.stop()
     """
 
@@ -318,7 +316,7 @@ class ThumbWorker:
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
-    def start(self, pending: list[tuple[str, str]]):
+    def start(self, pending: list[str]):
         self.stop()
         self._stop_event.clear()
         self._thread = threading.Thread(
@@ -338,12 +336,13 @@ class ThumbWorker:
     def is_running(self):
         return self._thread is not None and self._thread.is_alive()
 
-    def _run(self, pending: list[tuple[str, str]]):
+    def _run(self, pending: list[str]):
         total = len(pending)
-        for i, (rel_path, abs_path) in enumerate(pending):
+        for i, rel_path in enumerate(pending):
             if self._stop_event.is_set():
                 self._queue.put(("abort", None, None, 0, 0))
                 return
+            abs_path = self._db._abs(rel_path)
             jpeg_bytes = self._generate(abs_path)
             if jpeg_bytes:
                 self._db.set_thumb(rel_path, jpeg_bytes)
