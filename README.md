@@ -13,6 +13,7 @@
 - Filter image list by substring in captions.
 - List and thumbnail view modes with keyboard navigation.
 - Thumbnail cache stored in SQLite (auto-generated, invalidated on file changes).
+- Working with large directories (10 000 images).
 
 ## Install:
 1. Clone the repository or download the source code.

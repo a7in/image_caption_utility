@@ -18,6 +18,7 @@ import io
 import sqlite3
 import threading
 import queue
+import collections
 from PIL import Image
 
 THUMB_SIZE = 128
@@ -196,6 +197,47 @@ class ImageDB:
             )
             return [r["rel_path"] for r in cur.fetchall()]
 
+    def get_thumbs_bulk(self, rel_paths: list[str]) -> dict[str, bytes | None]:
+        """Return {rel_path: thumb_bytes_or_None} for the given set, in one SQL batch.
+
+        Missing paths are included with value None. Safe for large lists — chunks
+        the IN clause to avoid SQLite parameter limits.
+        """
+        if not rel_paths:
+            return {}
+        result: dict[str, bytes | None] = {rp: None for rp in rel_paths}
+        CHUNK = 500
+        with self._lock:
+            for i in range(0, len(rel_paths), CHUNK):
+                chunk = rel_paths[i:i + CHUNK]
+                placeholders = ",".join("?" * len(chunk))
+                cur = self._conn.execute(
+                    f"SELECT rel_path, thumb FROM images WHERE rel_path IN ({placeholders})",
+                    chunk,
+                )
+                for r in cur:
+                    result[r["rel_path"]] = r["thumb"]
+        return result
+
+    def get_visible_rows_bulk(self, rel_paths: list[str]) -> dict[str, tuple[bytes | None, int]]:
+        """Return {rel_path: (thumb_bytes_or_None, has_caption)} in one SQL batch."""
+        if not rel_paths:
+            return {}
+        result: dict[str, tuple[bytes | None, int]] = {rp: (None, 0) for rp in rel_paths}
+        CHUNK = 500
+        with self._lock:
+            for i in range(0, len(rel_paths), CHUNK):
+                chunk = rel_paths[i:i + CHUNK]
+                placeholders = ",".join("?" * len(chunk))
+                cur = self._conn.execute(
+                    f"SELECT rel_path, thumb, has_caption FROM images "
+                    f"WHERE rel_path IN ({placeholders})",
+                    chunk,
+                )
+                for r in cur:
+                    result[r["rel_path"]] = (r["thumb"], r["has_caption"])
+        return result
+
     # ------------------------------------------------------------------
     # Update caption
     # ------------------------------------------------------------------
@@ -301,53 +343,136 @@ class ImageDB:
 
 class ThumbWorker:
     """
-    Generates thumbnails in a background thread and communicates results
-    via a queue.  UI polls with root.after().
+    Long-running background thumbnail generator.
 
-    Usage:
-        worker = ThumbWorker(db, result_queue)
-        worker.start(pending_rel_paths)   # list of rel_paths
-        worker.stop()
+    One daemon thread is started via ``start()`` and stays alive until ``stop()``.
+    The UI calls ``request(rel_paths)`` whenever the visible set changes — the
+    pending queue is atomically replaced (priority = given order), deduplicated,
+    and the worker wakes up. Results are pushed to ``result_queue`` as
+    5-tuples ``(kind, rel_path, jpeg_bytes, processed, remaining)`` where
+    ``kind`` is one of:
+
+        - ``"thumb"`` — one thumbnail finished; ``remaining`` is what's still
+                        queued AFTER this one.
+        - ``"idle"``  — queue drained; worker is waiting.
+
+    ``cancel(rel_path)`` removes a single path from the pending set (used on
+    file delete).
     """
 
     def __init__(self, db: ImageDB, result_queue: queue.Queue):
         self._db = db
         self._queue = result_queue
         self._thread: threading.Thread | None = None
+        self._pending: collections.deque[str] = collections.deque()
+        self._pending_set: set[str] = set()
+        self._lock = threading.Lock()
+        self._wake = threading.Event()
         self._stop_event = threading.Event()
 
-    def start(self, pending: list[str]):
-        self.stop()
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def start(self):
+        """Start the background thread if not already running."""
+        if self._thread is not None and self._thread.is_alive():
+            return
         self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._run, args=(pending,), daemon=True
-        )
+        self._wake.clear()
+        self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
 
     def stop(self):
+        """Signal the worker to stop and wait briefly for it to exit."""
         self._stop_event.set()
-        # drain queue so poll doesn't keep firing
-        while True:
-            try:
-                self._queue.get_nowait()
-            except queue.Empty:
-                break
+        self._wake.set()
+        t = self._thread
+        if t is not None and t.is_alive():
+            t.join(timeout=2.0)
+        self._thread = None
+        with self._lock:
+            self._pending.clear()
+            self._pending_set.clear()
 
-    def is_running(self):
+    def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
-    def _run(self, pending: list[str]):
-        total = len(pending)
-        for i, rel_path in enumerate(pending):
-            if self._stop_event.is_set():
-                self._queue.put(("abort", None, None, 0, 0))
-                return
-            abs_path = self._db._abs(rel_path)
+    # ------------------------------------------------------------------
+    # Queue management
+    # ------------------------------------------------------------------
+
+    def request(self, rel_paths: list[str]):
+        """Replace the pending queue with *rel_paths* (order = priority).
+
+        Paths already present are re-ordered to match the new list.
+        """
+        with self._lock:
+            self._pending.clear()
+            self._pending_set.clear()
+            for rp in rel_paths:
+                if rp not in self._pending_set:
+                    self._pending.append(rp)
+                    self._pending_set.add(rp)
+        self._wake.set()
+
+    def cancel(self, rel_path: str):
+        """Remove *rel_path* from the pending queue (no-op if not present)."""
+        with self._lock:
+            if rel_path in self._pending_set:
+                self._pending_set.discard(rel_path)
+                try:
+                    self._pending.remove(rel_path)
+                except ValueError:
+                    pass
+
+    def pending_count(self) -> int:
+        with self._lock:
+            return len(self._pending)
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _next(self) -> tuple[str | None, int]:
+        """Pop the next pending path atomically. Returns (path, remaining_after)."""
+        with self._lock:
+            while self._pending:
+                rp = self._pending.popleft()
+                if rp in self._pending_set:
+                    self._pending_set.discard(rp)
+                    return rp, len(self._pending)
+            return None, 0
+
+    def _run_loop(self):
+        idle_sent = False
+        while not self._stop_event.is_set():
+            rp, remaining = self._next()
+            if rp is None:
+                if not idle_sent:
+                    try:
+                        self._queue.put(("idle", None, None, 0, 0))
+                    except Exception:
+                        pass
+                    idle_sent = True
+                self._wake.clear()
+                # re-check after clearing to avoid missing a late request()
+                if self._pending:
+                    continue
+                self._wake.wait()
+                continue
+            idle_sent = False
+            abs_path = self._db._abs(rp)
             jpeg_bytes = self._generate(abs_path)
             if jpeg_bytes:
-                self._db.set_thumb(rel_path, jpeg_bytes)
-            self._queue.put(("thumb", rel_path, jpeg_bytes, i + 1, total))
-        self._queue.put(("done", None, None, total, total))
+                try:
+                    self._db.set_thumb(rp, jpeg_bytes)
+                except Exception:
+                    pass
+            try:
+                self._queue.put(("thumb", rp, jpeg_bytes, 1, remaining))
+            except Exception:
+                pass
 
     @staticmethod
     def _generate(abs_path: str) -> bytes | None:
