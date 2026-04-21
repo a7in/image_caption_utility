@@ -7,6 +7,7 @@ from PIL import Image, ImageTk
 import subprocess
 import platform
 from deep_translator import GoogleTranslator
+from tkinterdnd2 import TkinterDnD, DND_FILES # for drag-and-drop feature
 
 from db import ImageDB
 from thumb_view import ThumbnailView
@@ -112,6 +113,14 @@ class ImageCaptionApp:
         self.image_label.grid(row=1, column=0, sticky="nsew", padx=2, pady=2)
         self.image_label.bind("<Configure>", self.resize_image)
         self.image_label.bind("<Double-Button-1>", self.open_image)
+        # Enable OS-level drag-out of the current image file (e.g. into browser upload).
+        # Note: requires the root to be created via TkinterDnD.Tk(); in plain Tk (tests),
+        # tkdnd commands are not available.
+        try:
+            self.image_label.drag_source_register(1, DND_FILES)
+            self.image_label.dnd_bind("<<DragInitCmd>>", self._on_drag_init)
+        except Exception:
+            pass
 
         text_frame = Frame(img_frame, height=text_frame_height)
         text_frame.grid(row=2, column=0, sticky="nsew")
@@ -753,6 +762,16 @@ class ImageCaptionApp:
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
+    def _on_drag_init(self, event):
+        """Provide current image path to OS drag-and-drop as a file list."""
+        if not self.current_image:
+            return ("copy", DND_FILES, "")
+        ap = os.path.normpath(self.db._abs(self.current_image))
+        # tkdnd expects a Tcl-style file list; wrap paths with spaces.
+        if " " in ap:
+            ap = "{" + ap + "}"
+        return ("copy", DND_FILES, ap)
+
 
 # ===========================================================================
 # Helpers
@@ -767,7 +786,7 @@ def keypress(e):
 
 
 if __name__ == "__main__":
-    root = Tk()
+    root = TkinterDnD.Tk()
     root.bind_all("<KeyPress>", keypress)
     app = ImageCaptionApp(root)
     root.mainloop()
