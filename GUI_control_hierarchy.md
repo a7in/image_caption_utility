@@ -32,8 +32,8 @@ L-- container (Frame)
             ¦   +-- thumb_mode_btn (Button)
             ¦   +-- thumb_progress_bar (Progressbar)
             ¦   L-- thumb_progress_label (Label)
-            +-- file_list (Listbox)
-            +-- scrollbar (Scrollbar)
+            +-- file_list (ttk.Treeview: columns path, len)
+            +-- scrollbar (Scrollbar, yscroll for file_list)
             L-- thumb_view.frame (Frame)  [created by ThumbnailView; shown only in thumbs mode]
                 +-- thumb_view._canvas (Canvas)  [viewport + scrollregion; takes focus for keyboard nav]
                 +-- thumb_view._scrollbar (Scrollbar)

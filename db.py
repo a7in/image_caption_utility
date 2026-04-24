@@ -173,6 +173,14 @@ class ImageDB:
             cur = self._conn.execute(query, params)
             return cur.fetchall()
 
+    def get_caption_lengths(self) -> dict[str, int]:
+        """Return {rel_path: character count of caption_text} for all rows."""
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT rel_path, LENGTH(caption_text) AS n FROM images"
+            )
+            return {r["rel_path"]: int(r["n"] or 0) for r in cur}
+
     def get_by_rel(self, rel_path: str) -> sqlite3.Row | None:
         with self._lock:
             cur = self._conn.execute(

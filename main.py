@@ -193,15 +193,25 @@ class ImageCaptionApp:
         self.thumb_progress_label = Label(mode_frame, text="", fg="gray", font=("", 8))
         # hidden until generation starts
 
-        # list box
-        self.file_list = Listbox(nav_frame)
+        # file list (path + caption length), sortable
+        self._sort_state = {"col": None, "reverse": False}
+        self.file_list = ttk.Treeview(
+            nav_frame,
+            columns=("path", "len"),
+            show="headings",
+            selectmode="browse",
+        )
+        self.file_list.heading("path", text="File", command=lambda: self._sort_by_column("path"))
+        self.file_list.heading("len", text="Len", command=lambda: self._sort_by_column("len"))
+        self.file_list.column("path", anchor="w", stretch=True)
+        self.file_list.column("len", anchor="e", width=56, stretch=False, minwidth=40)
         self.file_list.grid(row=2, column=0, sticky="nsew", padx=(2, 0), pady=2)
-        self.file_list.bind("<<ListboxSelect>>", self.on_file_select)
+        self.file_list.bind("<<TreeviewSelect>>", self.on_file_select)
         self.file_list.bind("<FocusOut>", lambda e: self.root.after_idle(self.restore_listbox_selection))
 
         self.scrollbar = Scrollbar(nav_frame, orient=VERTICAL, command=self.file_list.yview, width=18)
         self.scrollbar.grid(row=2, column=1, sticky="ns", padx=(0, 2), pady=2)
-        self.file_list.config(yscrollcommand=self.scrollbar.set)
+        self.file_list.configure(yscrollcommand=self.scrollbar.set)
 
         # Thumbnail panel — fully encapsulated in ThumbnailView.
         self.thumb_view = ThumbnailView(
@@ -279,13 +289,58 @@ class ImageCaptionApp:
     # ==================================================================
 
     def _rebuild_file_list(self):
-        """Repopulate Listbox from self.image_files."""
-        self.file_list.delete(0, END)
+        """Repopulate Treeview from self.image_files (iid = rel_path)."""
+        tv = self.file_list
+        tv.delete(*tv.get_children())
+        lengths = self.db.get_caption_lengths()
         for rp in self.image_files:
-            self.file_list.insert(END, self._reldisp(rp))
+            tv.insert("", END, iid=rp, values=(self._reldisp(rp), lengths.get(rp, 0)))
+
+    def _sort_by_column(self, col: str):
+        """Sort self.image_files by column; toggle direction when same column."""
+        if not self.image_files:
+            return
+        if self._sort_state["col"] == col:
+            self._sort_state["reverse"] = not self._sort_state["reverse"]
+        else:
+            self._sort_state["col"] = col
+            self._sort_state["reverse"] = False
+        self._apply_current_sort()
+        # Explicit sort by the user: keep the current row in view.
+        self.restore_listbox_selection()
+
+    def _apply_current_sort(self):
+        """Reorder self.image_files per _sort_state and refresh the tree.
+
+        Reorders Treeview items in place via `move()` so the current scroll
+        position and selection are preserved. Callers that need the current
+        row scrolled into view should invoke `see()` explicitly.
+        """
+        if not self.image_files or self._sort_state["col"] is None:
+            return
+        col, rev = self._sort_state["col"], self._sort_state["reverse"]
+        lengths = self.db.get_caption_lengths()
+        cur_rp = self.current_image
+        if col == "path":
+            key = lambda rp: self._reldisp(rp).lower()
+        else:
+            key = lambda rp: (lengths.get(rp, 0), self._reldisp(rp).lower())
+        self.image_files.sort(key=key, reverse=rev)
+        tv = self.file_list
+        existing = set(tv.get_children(""))
+        for i, rp in enumerate(self.image_files):
+            if rp in existing:
+                tv.move(rp, "", i)
+            else:
+                tv.insert("", i, iid=rp,
+                          values=(self._reldisp(rp), lengths.get(rp, 0)))
+        if cur_rp and cur_rp in self.image_files:
+            self.image_index = self.image_files.index(cur_rp)
+        else:
+            self.image_index = min(self.image_index, len(self.image_files) - 1)
 
     def _reldisp(self, rp: str) -> str:
-        r"""Relative path for display in Listbox (backslash, root = \)."""
+        r"""Relative path for display in file list (backslash, root = \)."""
         if not rp or rp == ".": return "\\"
         return rp.replace("/", "\\")
 
@@ -319,9 +374,9 @@ class ImageCaptionApp:
             with open(self.current_caption_file, "r", encoding="utf-8") as f:
                 self.text_area.insert("1.0", f.read())
 
-        self.file_list.selection_clear(0, END)
-        self.file_list.selection_set(self.image_index)
-        self.file_list.see(self.image_index)
+        rp_sel = self.image_files[self.image_index]
+        self.file_list.selection_set(rp_sel)
+        self.file_list.see(rp_sel)
 
         if self.view_mode == "thumbs":
             self.thumb_view.set_current(self.image_index)
@@ -329,9 +384,10 @@ class ImageCaptionApp:
 
     def restore_listbox_selection(self):
         if self.image_files and 0 <= self.image_index < len(self.image_files):
-            self.file_list.selection_clear(0, END)
-            self.file_list.selection_set(self.image_index)
-            self.file_list.see(self.image_index)
+            rp = self.image_files[self.image_index]
+            if self.file_list.exists(rp):
+                self.file_list.selection_set(rp)
+                self.file_list.see(rp)
 
     def resize_image(self, event=None):
         if not self.original_image:
@@ -368,19 +424,40 @@ class ImageCaptionApp:
         if not self.current_caption_file:
             return
         caption = self.text_area.get("1.0", "end-1c")
-        with open(self.current_caption_file, "w", encoding="utf-8") as f:
-            f.write(caption)
-        if self.current_image:
-            self.db.update_caption(self.current_image, caption.strip())
-            self.thumb_view.refresh_caption_dot(self.current_image)
+        if os.path.exists(self.current_caption_file):
+            with open(self.current_caption_file, "r", encoding="utf-8") as f:
+                previous = f.read()
+        else:
+            previous = ""
+        if caption != previous:
+            with open(self.current_caption_file, "w", encoding="utf-8") as f:
+                f.write(caption)
+        if not self.current_image:
+            return
+        # Keep DB caption_text / has_caption aligned with the editor (same as on disk).
+        self.db.update_caption(self.current_image, caption)
+        self.thumb_view.refresh_caption_dot(self.current_image)
+        rp = self.current_image
+        if self.file_list.exists(rp):
+            vals = self.file_list.item(rp, "values")
+            disp = vals[0] if vals else self._reldisp(rp)
+            self.file_list.item(rp, values=(disp, len(caption)))
+        if self._sort_state["col"] == "len":
+            self._apply_current_sort()
 
     # ==================================================================
     # Navigation
     # ==================================================================
 
-    def select_image(self, step=0, index=None):
+    def select_image(self, step=0, index=None, rp=None):
         self.save_caption()
-        if index is not None:
+        if rp is not None:
+            # Resolve index after save_caption (which may have re-sorted the list).
+            try:
+                self.image_index = self.image_files.index(rp)
+            except ValueError:
+                return
+        elif index is not None:
             self.image_index = index
         else:
             self.image_index = (self.image_index + step) % len(self.image_files)
@@ -388,12 +465,14 @@ class ImageCaptionApp:
 
     def on_file_select(self, event):
         try:
-            sel = event.widget.curselection()
-            if sel:
-                idx = sel[0]
-                if idx != self.image_index:
-                    self.select_image(index=idx)
-        except IndexError:
+            sel = event.widget.selection()
+            if not sel:
+                return
+            rp = sel[0]
+            if rp == self.current_image:
+                return
+            self.select_image(rp=rp)
+        except (ValueError, IndexError):
             pass
 
     # ==================================================================
@@ -480,6 +559,7 @@ class ImageCaptionApp:
         self.all_image_files = synced_rps
         self.image_files     = list(synced_rps)
         self.image_index     = 0
+        self._sort_state = {"col": None, "reverse": False}
 
         # populate directories combobox
         dirs = []
@@ -560,9 +640,9 @@ class ImageCaptionApp:
         self.file_entry.delete(0, END)
         self.file_entry.insert(0, os.path.basename(new_rp))
         self._rebuild_file_list()
-        self.file_list.selection_clear(0, END)
-        self.file_list.selection_set(self.image_index)
-        self.file_list.see(self.image_index)
+        rp_sel = self.image_files[self.image_index]
+        self.file_list.selection_set(rp_sel)
+        self.file_list.see(rp_sel)
         self.file_entry.focus_set()
 
         self.thumb_view.rename(old_rp, new_rp)
@@ -612,9 +692,9 @@ class ImageCaptionApp:
         self.file_entry.delete(0, END)
         self.file_entry.insert(0, os.path.basename(new_rp))
         self._rebuild_file_list()
-        self.file_list.selection_clear(0, END)
-        self.file_list.selection_set(self.image_index)
-        self.file_list.see(self.image_index)
+        rp_sel = self.image_files[self.image_index]
+        self.file_list.selection_set(rp_sel)
+        self.file_list.see(rp_sel)
 
         self.thumb_view.rename(old_rp, new_rp)
 
@@ -665,7 +745,8 @@ class ImageCaptionApp:
         if del_rp in self.all_image_files:
             self.all_image_files.remove(del_rp)
 
-        self.file_list.delete(cur_idx)
+        if self.file_list.exists(del_rp):
+            self.file_list.delete(del_rp)
         self.thumb_view.remove(del_rp)
 
         if not self.image_files:
@@ -708,6 +789,12 @@ class ImageCaptionApp:
                             f.write(new_content)
                         self.db.update_caption(rp, new_content)
                         self.thumb_view.refresh_caption_dot(rp)
+
+            if self._sort_state["col"] == "len":
+                self._apply_current_sort()
+            else:
+                self._rebuild_file_list()
+                self.restore_listbox_selection()
 
             messagebox.showinfo("Result", f"Replaced {count} instances.")
 
