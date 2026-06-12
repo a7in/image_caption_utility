@@ -1,7 +1,8 @@
 ﻿import os
+import queue
 from tkinter import *
 from tkinter import ttk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 from idlelib.tooltip import Hovertip
 from PIL import Image, ImageTk
 import subprocess
@@ -11,6 +12,40 @@ from tkinterdnd2 import TkinterDnD, DND_FILES # for drag-and-drop feature
 
 from db import ImageDB
 from thumb_view import ThumbnailView
+
+try:
+    from watchdog.observers import Observer
+    from watchdog.events import FileSystemEventHandler
+    _WATCHDOG_OK = True
+except Exception:                       # watchdog optional / missing
+    Observer = None
+    FileSystemEventHandler = object
+    _WATCHDOG_OK = False
+
+_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+
+
+class _NewFileHandler(FileSystemEventHandler):
+    """Pushes paths of newly-created image files onto a queue (watcher thread).
+
+    Only enqueues; never touches Tk/DB. Additions only — created and the
+    destination of a move (apps that write-temp-then-rename count as adds).
+    """
+
+    def __init__(self, q: "queue.Queue"):
+        self._q = q
+
+    def _maybe_enqueue(self, path):
+        if path and not isinstance(path, bytes) and path.lower().endswith(_IMAGE_EXTS):
+            self._q.put(path)
+
+    def on_created(self, event):
+        if not event.is_directory:
+            self._maybe_enqueue(event.src_path)
+
+    def on_moved(self, event):
+        if not event.is_directory:
+            self._maybe_enqueue(getattr(event, "dest_path", None))
 
 
 class ImageCaptionApp:
@@ -34,6 +69,10 @@ class ImageCaptionApp:
 
         self.view_mode = "list"
 
+        # ---- filesystem watcher (additions only) ----
+        self._fs_queue: queue.Queue = queue.Queue()
+        self._observer = None
+
         # ---- UI build ----
         self._build_ui()
 
@@ -41,6 +80,8 @@ class ImageCaptionApp:
         self.display_image()
         root.state("zoomed")
         root.after(200, root.focus_force)
+        self.root.after(700, self._poll_fs_queue)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ==================================================================
     # UI construction
@@ -63,6 +104,7 @@ class ImageCaptionApp:
             ("Save",           self.save_caption,         "Save current edited prompt"),
             ("Cancel",         self.load_caption,         "Return to original prompt"),
             ("Delete",         self.delete_current_image, "Delete current image and caption file"),
+            ("New folder",     self.create_subfolder,     "in current folder"),
         ]:
             btn = Button(b_frame, text=text, command=cmd)
             btn.pack(side=LEFT, padx=2, pady=2)
@@ -129,8 +171,16 @@ class ImageCaptionApp:
         text_frame.grid_columnconfigure(0, weight=1, uniform="txt")
         text_frame.grid_columnconfigure(1, weight=1, uniform="txt")
 
-        self.text_area = Text(text_frame, wrap=WORD, width=1)
-        self.text_area.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+        caption_frame = Frame(text_frame)
+        caption_frame.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+        caption_frame.grid_rowconfigure(0, weight=1)
+        caption_frame.grid_columnconfigure(0, weight=1)
+
+        self.text_area = Text(caption_frame, wrap=WORD, width=1)
+        self.text_area.grid(row=0, column=0, sticky="nsew")
+        self.text_area_scrollbar = Scrollbar(caption_frame, orient=VERTICAL, command=self.text_area.yview)
+        self.text_area_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.text_area.configure(yscrollcommand=self.text_area_scrollbar.set)
         for ev in ("<Button-1>", "<ButtonRelease-1>", "<FocusIn>", "<KeyPress>", "<KeyRelease>"):
             self.text_area.bind(ev, lambda e: self.root.after_idle(self.restore_listbox_selection))
 
@@ -574,11 +624,126 @@ class ImageCaptionApp:
         if self.view_mode == "thumbs":
             self.thumb_view.set_images(self.image_files, self.image_index)
 
+        self._start_watcher()
+
     def open_folder(self):
         self.load_images()
         self.image_index = 0
         self.display_image()
         self.filter_entry.delete(0, END)
+        if self.view_mode == "thumbs":
+            self.thumb_view.set_images(self.image_files, self.image_index)
+
+    def create_subfolder(self):
+        if not self.image_directory:
+            messagebox.showwarning("No folder", "Open a folder first.")
+            return
+        name = simpledialog.askstring("New folder", "Folder name:",
+                                      parent=self.root)
+        if not name or not name.strip():
+            return
+        name = name.strip()
+        new_path = os.path.join(self.image_directory, name)
+        try:
+            os.makedirs(new_path, exist_ok=False)
+        except FileExistsError:
+            messagebox.showerror("Error", f"Folder '{name}' already exists.")
+        except OSError as e:
+            messagebox.showerror("Error", str(e))
+        else:
+            rel = os.path.relpath(new_path, self.image_directory)
+            disp = rel.replace("/", "\\")
+            current = list(self.dir_entry["values"])
+            if disp not in current:
+                current.append(disp)
+                current.sort()
+                self.dir_entry["values"] = current
+
+    # ==================================================================
+    # Filesystem watcher (additions only)
+    # ==================================================================
+
+    def _start_watcher(self):
+        """(Re)start the watchdog observer on the current directory."""
+        self._stop_watcher()
+        if not _WATCHDOG_OK or not self.image_directory:
+            return
+        try:
+            obs = Observer()
+            obs.schedule(_NewFileHandler(self._fs_queue),
+                         self.image_directory, recursive=True)
+            obs.start()
+            self._observer = obs
+        except Exception:
+            self._observer = None   # never let monitoring break the app
+
+    def _stop_watcher(self):
+        if self._observer is not None:
+            try:
+                self._observer.stop()
+                self._observer.join(timeout=2)
+            except Exception:
+                pass
+            self._observer = None
+
+    def _on_close(self):
+        self._stop_watcher()
+        self.root.destroy()
+
+    def _poll_fs_queue(self):
+        """Drain watcher events on the main thread and add new files."""
+        try:
+            seen = set()
+            while True:
+                try:
+                    ap = self._fs_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if ap in seen:
+                    continue
+                seen.add(ap)
+                if os.path.isfile(ap):
+                    self._add_new_file(ap)
+        finally:
+            self.root.after(700, self._poll_fs_queue)
+
+    def _add_new_file(self, abs_path: str):
+        """Integrate a single newly-created image file into lists and views."""
+        rp = self.db.add_file(abs_path)
+        if rp is None or rp in self.all_image_files:
+            return
+
+        self.all_image_files.append(rp)
+
+        # Visible only if it passes the active filter.
+        text = self.filter_entry.get().strip()
+        show_empty = self.show_empty_var.get()
+        visible = True
+        if text or show_empty:
+            rows = self.db.get_all(filter_text=text, show_empty=show_empty)
+            visible = rp in {r["rel_path"] for r in rows}
+        if not visible:
+            return
+
+        self.image_files.append(rp)
+        lengths = self.db.get_caption_lengths()
+        self.file_list.insert("", END, iid=rp,
+                              values=(self._reldisp(rp), lengths.get(rp, 0)))
+
+        # Reapply current sort (cheap move()) or fall back to path order.
+        if self._sort_state.get("col"):
+            self._apply_current_sort()
+        else:
+            self.image_files.sort()
+            existing = set(self.file_list.get_children(""))
+            for i, r in enumerate(self.image_files):
+                if r in existing:
+                    self.file_list.move(r, "", i)
+
+        # Keep selection index consistent with current_image.
+        if self.current_image and self.current_image in self.image_files:
+            self.image_index = self.image_files.index(self.current_image)
+
         if self.view_mode == "thumbs":
             self.thumb_view.set_images(self.image_files, self.image_index)
 
@@ -698,7 +863,8 @@ class ImageCaptionApp:
 
         self.thumb_view.rename(old_rp, new_rp)
 
-        self.dir_entry.set(self._reldisp(new_dir))
+        new_rel_dir = os.path.relpath(new_dir, self.image_directory)
+        self.dir_entry.set(self._reldisp(new_rel_dir))
         
     def _update_path_in_lists(self, old_rp: str, new_rp: str):
         if old_rp in self.image_files:

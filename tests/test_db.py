@@ -52,10 +52,30 @@ def test_sync_adds_new_images(test_db, temp_image_dir):
     assert "img1.png" in synced_rels
     assert "img2.jpg" in synced_rels
 
+def test_add_file_inserts_new_row(test_db, temp_image_dir):
+    new_img = temp_image_dir / "new_img.png"
+    Image.new("RGB", (5, 5), color="blue").save(new_img, format="PNG")
+
+    rp = test_db.add_file(str(new_img))
+    assert rp == "new_img.png"
+
+    row = test_db.get_by_rel("new_img.png")
+    assert row is not None
+    assert row["rel_path"] == "new_img.png"
+
+
+def test_add_file_returns_none_for_duplicate(test_db, temp_image_dir):
+    img_path = str(temp_image_dir / "img1.png")
+    test_db.sync([img_path])        # insert via sync first
+
+    result = test_db.add_file(img_path)
+    assert result is None           # already in DB → None
+
+
 def test_sync_removes_stale_images(test_db, temp_image_dir):
     abs_paths = [str(temp_image_dir / "img1.png"), str(temp_image_dir / "img2.jpg")]
     test_db.sync(abs_paths)
-    
+
     # Keep only one image
     abs_paths_updated = [str(temp_image_dir / "img1.png")]
     synced_rels = test_db.sync(abs_paths_updated)

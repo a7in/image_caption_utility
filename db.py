@@ -150,6 +150,35 @@ class ImageDB:
         # Return rel_paths in original sort order
         return [self._rel(ap) for ap in abs_paths if self._rel(ap) in disk_set]
 
+    def add_file(self, abs_path: str) -> str | None:
+        """Insert a single newly-discovered image file.
+
+        Returns the normalised rel_path, or None if the row already exists
+        (or the file can't be read). Mirrors the INSERT logic in sync().
+        """
+        if not self._conn:
+            return None
+        rp = self._rel(abs_path)
+        try:
+            mtime = os.path.getmtime(abs_path)
+        except OSError:
+            return None
+        cap_text, has_cap = self._read_caption(abs_path)
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT 1 FROM images WHERE rel_path=?", (rp,)
+            )
+            if cur.fetchone() is not None:
+                return None
+            self._conn.execute(
+                """INSERT OR IGNORE INTO images
+                   (rel_path, mtime, has_caption, caption_text, thumb)
+                   VALUES (?, ?, ?, ?, NULL)""",
+                (rp, mtime, has_cap, cap_text)
+            )
+            self._conn.commit()
+        return rp
+
     # ------------------------------------------------------------------
     # Query
     # ------------------------------------------------------------------

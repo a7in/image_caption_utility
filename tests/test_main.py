@@ -217,6 +217,52 @@ def test_rename_file(app_gui, tmp_path):
     assert (tmp_path / "new_img1.png").exists() # Still there
     assert app_gui.current_image == "new_img1.png"
 
+def test_add_new_file_appends_to_lists_and_treeview(app_gui, tmp_path):
+    app_gui.all_image_files = ["a.png"]
+    app_gui.image_files     = ["a.png"]
+    app_gui.image_directory = str(tmp_path)
+    app_gui._sort_state     = {"col": None, "reverse": False}
+    app_gui.current_image   = "a.png"
+    app_gui.image_index     = 0
+    app_gui.file_list.delete(*app_gui.file_list.get_children())
+    app_gui.file_list.insert("", "end", iid="a.png", values=("a.png", 0))
+
+    app_gui.db.add_file.return_value = "b.png"
+    app_gui.db.get_caption_lengths.return_value = {"b.png": 0}
+    app_gui.db.get_all.return_value = []  # no active filter → not called
+
+    app_gui._add_new_file(str(tmp_path / "b.png"))
+
+    assert "b.png" in app_gui.all_image_files
+    assert "b.png" in app_gui.image_files
+    assert app_gui.file_list.exists("b.png")
+    assert app_gui.image_index == 0        # current_image index unchanged
+
+
+def test_add_new_file_hidden_by_active_filter(app_gui, tmp_path):
+    app_gui.all_image_files = ["a.png"]
+    app_gui.image_files     = ["a.png"]
+    app_gui.image_directory = str(tmp_path)
+    app_gui._sort_state     = {"col": None, "reverse": False}
+
+    app_gui.filter_entry.delete(0, tk.END)
+    app_gui.filter_entry.insert(0, "a")   # active filter that matches only a.png
+
+    app_gui.db.add_file.return_value = "b.png"
+    app_gui.db.get_caption_lengths.return_value = {}
+    # filter returns only a.png, so b.png is not visible
+    app_gui.db.get_all.return_value = [{"rel_path": "a.png"}]
+
+    app_gui._add_new_file(str(tmp_path / "b.png"))
+
+    assert "b.png" in app_gui.all_image_files   # tracked in master list
+    assert "b.png" not in app_gui.image_files   # not shown while filter active
+    assert not app_gui.file_list.exists("b.png")
+
+    # cleanup
+    app_gui.filter_entry.delete(0, tk.END)
+
+
 def test_open_find_replace(app_gui, tmp_path):
     app_gui.image_files = ["img1.png", "img2.png", "img3.png"]
     app_gui.db._abs.side_effect = lambda rp: os.path.join(tmp_path, rp)

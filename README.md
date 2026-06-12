@@ -15,6 +15,8 @@
 - Thumbnail cache stored in SQLite (auto-generated, invalidated on file changes).
 - Working with large directories (10 000 images).
 - Drag and drop current image to another program.
+- Auto-detection of new images added to the open folder (watchdog-based, no restart needed).
+- Create subfolders inside the current folder via the "New folder" button.
 
 ## Install:
 1. Clone the repository or download the source code.
