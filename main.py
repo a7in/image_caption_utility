@@ -12,6 +12,7 @@ from tkinterdnd2 import TkinterDnD, DND_FILES # for drag-and-drop feature
 
 from db import ImageDB
 from thumb_view import ThumbnailView
+from extract_text import extract_caption
 
 try:
     from watchdog.observers import Observer
@@ -184,10 +185,29 @@ class ImageCaptionApp:
         for ev in ("<Button-1>", "<ButtonRelease-1>", "<FocusIn>", "<KeyPress>", "<KeyRelease>"):
             self.text_area.bind(ev, lambda e: self.root.after_idle(self.restore_listbox_selection))
 
-        trans_frame = Frame(text_frame)
-        trans_frame.grid(row=0, column=1, sticky="nsew", padx=2, pady=2)
+        # right side: notebook with EXIF (extracted text) and Translate tabs
+        self.right_notebook = ttk.Notebook(text_frame)
+        self.right_notebook.grid(row=0, column=1, sticky="nsew", padx=2, pady=2)
+
+        # --- EXIF tab: read-only view of text extracted from the image ---
+        exif_frame = Frame(self.right_notebook)
+        exif_frame.grid_rowconfigure(0, weight=1)
+        exif_frame.grid_columnconfigure(0, weight=1)
+        self.right_notebook.add(exif_frame, text="EXIF")
+
+        self.exif_text_area = Text(exif_frame, wrap=WORD, width=1)
+        self.exif_text_area.grid(row=0, column=0, sticky="nsew")
+        self.exif_text_scrollbar = Scrollbar(exif_frame, orient=VERTICAL, command=self.exif_text_area.yview)
+        self.exif_text_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.exif_text_area.configure(yscrollcommand=self.exif_text_scrollbar.set)
+        for ev in ("<Button-1>", "<ButtonRelease-1>", "<FocusIn>", "<KeyPress>"):
+            self.exif_text_area.bind(ev, lambda e: self.root.after_idle(self.restore_listbox_selection))
+
+        # --- Translate tab: existing translation controls ---
+        trans_frame = Frame(self.right_notebook)
         trans_frame.grid_rowconfigure(2, weight=1)
         trans_frame.grid_columnconfigure(0, weight=1)
+        self.right_notebook.add(trans_frame, text="Translate")
 
         self.trans_button = Button(trans_frame, text="Translate and add -^ from:", command=self.translate_text)
         self.trans_button.grid(row=0, column=0, sticky="w", padx=2, pady=2)
@@ -202,6 +222,9 @@ class ImageCaptionApp:
             self.trans_text_area.bind(ev, lambda e: self.root.after_idle(self.restore_listbox_selection))
         for ev in ("<Button-1>", "<FocusIn>"):
             self.text_lang.bind(ev, lambda e: self.root.after_idle(self.restore_listbox_selection))
+
+        # EXIF tab is active on startup
+        self.right_notebook.select(exif_frame)
 
         # ---- right: nav panel ----
         nav_frame = Frame(main_frame)
@@ -423,6 +446,11 @@ class ImageCaptionApp:
         if os.path.exists(self.current_caption_file):
             with open(self.current_caption_file, "r", encoding="utf-8") as f:
                 self.text_area.insert("1.0", f.read())
+
+        # populate EXIF tab with text extracted from the displayed image
+        self.exif_text_area.delete("1.0", END)
+        extracted = extract_caption(abs_path)
+        self.exif_text_area.insert("1.0", extracted if extracted else "(no embedded text)")
 
         rp_sel = self.image_files[self.image_index]
         self.file_list.selection_set(rp_sel)

@@ -17,6 +17,7 @@
 - Drag and drop current image to another program.
 - Auto-detection of new images added to the open folder (watchdog-based, no restart needed).
 - Create subfolders inside the current folder via the "New folder" button.
+- EXIF tab showing prompt/caption text embedded in the image (Automatic1111, ComfyUI).
 
 ## Install:
 1. Clone the repository or download the source code.
