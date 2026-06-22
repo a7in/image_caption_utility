@@ -18,6 +18,10 @@
 - Auto-detection of new images added to the open folder (watchdog-based, no restart needed).
 - Create subfolders inside the current folder via the "New folder" button.
 - EXIF tab showing prompt/caption text embedded in the image (Automatic1111, ComfyUI).
+- AI auto-captioning via an external LLM (OpenAI-compatible endpoint, e.g. llama-server):
+  - "Auto-caption" generates a plain English description for the current image; the result is kept even if you navigate away (saved to the original image).
+  - "Caption all" batch-generates captions for every image without one, with progress shown in the thumbnail progress bar and a Stop option.
+  - "LLM settings" configures the connection (base URL, API key, model auto-detect, prompts, etc.); settings are stored in `auto_caption_settings.ini` in the program folder.
 
 ## Install:
 1. Clone the repository or download the source code.

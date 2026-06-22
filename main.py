@@ -12,7 +12,8 @@ from tkinterdnd2 import TkinterDnD, DND_FILES # for drag-and-drop feature
 
 from db import ImageDB
 from thumb_view import ThumbnailView
-from extract_text import extract_caption
+from extract_text import extract_text_nodes
+from auto_caption import AutoCaptioner
 
 try:
     from watchdog.observers import Observer
@@ -74,6 +75,9 @@ class ImageCaptionApp:
         self._fs_queue: queue.Queue = queue.Queue()
         self._observer = None
 
+        # ---- auto-captioning (external LLM) ----
+        self.auto_captioner = AutoCaptioner(self)
+
         # ---- UI build ----
         self._build_ui()
 
@@ -106,6 +110,9 @@ class ImageCaptionApp:
             ("Cancel",         self.load_caption,         "Return to original prompt"),
             ("Delete",         self.delete_current_image, "Delete current image and caption file"),
             ("New folder",     self.create_subfolder,     "in current folder"),
+            ("Auto-caption",   self.auto_captioner.generate_for_current, "Generate a caption for the current image via an external LLM"),
+            ("Caption all",    self.auto_captioner.generate_for_all_missing, "Generate captions for all images that have no caption yet"),
+            ("LLM settings",   self.auto_captioner.open_settings, "Configure the LLM connection used for auto-captioning"),
         ]:
             btn = Button(b_frame, text=text, command=cmd)
             btn.pack(side=LEFT, padx=2, pady=2)
@@ -117,6 +124,10 @@ class ImageCaptionApp:
                 self.cancel_button = btn
             elif text == "Delete":
                 self.delete_button = btn
+            elif text == "Auto-caption":
+                self.auto_captioner.button = btn
+            elif text == "Caption all":
+                self.auto_captioner.batch_button = btn
 
         # ---- main split frame ----
         main_frame = Frame(container)
@@ -189,22 +200,16 @@ class ImageCaptionApp:
         self.right_notebook = ttk.Notebook(text_frame)
         self.right_notebook.grid(row=0, column=1, sticky="nsew", padx=2, pady=2)
 
-        # --- EXIF tab: read-only view of text extracted from the image ---
-        exif_frame = Frame(self.right_notebook)
-        exif_frame.grid_rowconfigure(0, weight=1)
-        exif_frame.grid_columnconfigure(0, weight=1)
-        self.right_notebook.add(exif_frame, text="EXIF")
+        # --- EXIF tabs: read-only views of text extracted from the image.
+        # One tab per source node ("Exif-1", "Exif-2", ...), added/removed
+        # dynamically by update_exif_tabs(); the first one exists on startup.
+        self.exif_tabs = []  # list of (frame, text_area), kept before Translate
+        exif_frame, _ = self._make_exif_tab()
+        self.right_notebook.add(exif_frame, text="Exif-1")
+        self.exif_tabs.append((exif_frame, _))
 
-        self.exif_text_area = Text(exif_frame, wrap=WORD, width=1)
-        self.exif_text_area.grid(row=0, column=0, sticky="nsew")
-        self.exif_text_scrollbar = Scrollbar(exif_frame, orient=VERTICAL, command=self.exif_text_area.yview)
-        self.exif_text_scrollbar.grid(row=0, column=1, sticky="ns")
-        self.exif_text_area.configure(yscrollcommand=self.exif_text_scrollbar.set)
-        for ev in ("<Button-1>", "<ButtonRelease-1>", "<FocusIn>", "<KeyPress>"):
-            self.exif_text_area.bind(ev, lambda e: self.root.after_idle(self.restore_listbox_selection))
-
-        # --- Translate tab: existing translation controls ---
-        trans_frame = Frame(self.right_notebook)
+        # --- Translate tab: existing translation controls (always last) ---
+        self.trans_frame = trans_frame = Frame(self.right_notebook)
         trans_frame.grid_rowconfigure(2, weight=1)
         trans_frame.grid_columnconfigure(0, weight=1)
         self.right_notebook.add(trans_frame, text="Translate")
@@ -223,7 +228,7 @@ class ImageCaptionApp:
         for ev in ("<Button-1>", "<FocusIn>"):
             self.text_lang.bind(ev, lambda e: self.root.after_idle(self.restore_listbox_selection))
 
-        # EXIF tab is active on startup
+        # first EXIF tab is active on startup
         self.right_notebook.select(exif_frame)
 
         # ---- right: nav panel ----
@@ -447,10 +452,8 @@ class ImageCaptionApp:
             with open(self.current_caption_file, "r", encoding="utf-8") as f:
                 self.text_area.insert("1.0", f.read())
 
-        # populate EXIF tab with text extracted from the displayed image
-        self.exif_text_area.delete("1.0", END)
-        extracted = extract_caption(abs_path)
-        self.exif_text_area.insert("1.0", extracted if extracted else "(no embedded text)")
+        # populate EXIF tabs with per-node text extracted from the image
+        self.update_exif_tabs(extract_text_nodes(abs_path))
 
         rp_sel = self.image_files[self.image_index]
         self.file_list.selection_set(rp_sel)
@@ -459,6 +462,54 @@ class ImageCaptionApp:
         if self.view_mode == "thumbs":
             self.thumb_view.set_current(self.image_index)
 
+
+    def _make_exif_tab(self):
+        """Build one read-only EXIF tab; return (frame, text_area)."""
+        frame = Frame(self.right_notebook)
+        frame.grid_rowconfigure(0, weight=1)
+        frame.grid_columnconfigure(0, weight=1)
+        area = Text(frame, wrap=WORD, width=1)
+        area.grid(row=0, column=0, sticky="nsew")
+        scrollbar = Scrollbar(frame, orient=VERTICAL, command=area.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        area.configure(yscrollcommand=scrollbar.set)
+        for ev in ("<Button-1>", "<ButtonRelease-1>", "<FocusIn>", "<KeyPress>"):
+            area.bind(ev, lambda e: self.root.after_idle(self.restore_listbox_selection))
+        return frame, area
+
+    def update_exif_tabs(self, nodes):
+        """Show extracted per-node text across dynamic "Exif-N" tabs.
+
+        ``nodes`` is a list of ``(node_name, text)`` pairs. They are sorted by
+        text length (descending) and the top 5 are shown, one per tab, each
+        prefixed with a ``Node:<Name>`` header line. Tabs are created/removed
+        as needed and always kept before the permanent Translate tab.
+        """
+        nodes = sorted(nodes, key=lambda nt: len(nt[1]), reverse=True)[:5]
+        if not nodes:
+            nodes = [("", "")]  # always keep at least one (placeholder) tab
+
+        # grow / shrink the pool of EXIF tabs to match the node count
+        while len(self.exif_tabs) < len(nodes):
+            frame, area = self._make_exif_tab()
+            self.right_notebook.insert(self.trans_frame, frame, text="")
+            self.exif_tabs.append((frame, area))
+        while len(self.exif_tabs) > len(nodes):
+            frame, area = self.exif_tabs.pop()
+            self.right_notebook.forget(frame)
+            frame.destroy()
+
+        # fill each tab
+        for i, ((frame, area), (name, text)) in enumerate(
+            zip(self.exif_tabs, nodes), start=1
+        ):
+            self.right_notebook.tab(frame, text=f"Exif-{i}")
+            if name:
+                body = f"Node:{name}\n{text}"
+            else:
+                body = text or "(no embedded text)"
+            area.delete("1.0", END)
+            area.insert("1.0", body)
 
     def restore_listbox_selection(self):
         if self.image_files and 0 <= self.image_index < len(self.image_files):
