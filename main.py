@@ -1109,8 +1109,54 @@ class ImageCaptionApp:
 # Helpers
 # ===========================================================================
 
+def install_text_context_menu(root):
+    """Attach a Cut/Copy/Paste/Select-All popup to every Entry and Text widget.
+
+    Tk widgets are not native OS controls, so they have no system context menu.
+    We bind one menu to the widget *classes* so all current and future
+    Entry/Text instances (incl. dialogs) get it automatically.
+    """
+    menu = Menu(root, tearoff=0)
+
+    def _do(event_name):
+        w = menu._target
+        if w is not None:
+            w.event_generate(event_name)
+
+    menu.add_command(label="Cut", command=lambda: _do("<<Cut>>"))
+    menu.add_command(label="Copy", command=lambda: _do("<<Copy>>"))
+    menu.add_command(label="Paste", command=lambda: _do("<<Paste>>"))
+    menu.add_separator()
+    menu.add_command(label="Select All", command=lambda: _do("<<SelectAll>>"))
+
+    def popup(event):
+        w = event.widget
+        # don't pop up on disabled widgets
+        try:
+            if str(w.cget("state")) == "disabled":
+                return
+        except Exception:
+            pass
+        menu._target = w
+        try:
+            w.focus_set()
+        except Exception:
+            pass
+        menu.tk_popup(event.x_root, event.y_root)
+        return "break"
+
+    # Button-3 = right click on Windows/Linux; Button-2 on macOS
+    btn = "<Button-2>" if platform.system() == "Darwin" else "<Button-3>"
+    for cls in ("Entry", "TEntry", "Text"):
+        root.bind_class(cls, btn, popup)
+
+
 # workaround for ctrl+c ctrl+v on non-Latin keyboard layouts
 def keypress(e):
+    # only act when Control is held (state bit 0x0004); otherwise plain
+    # Shift+V / Shift+C would wrongly trigger paste/copy
+    if not (e.state & 0x0004):
+        return
     if e.keycode == 86 and e.keysym != "v" and e.char != "м":
         e.widget.event_generate("<<Paste>>")
     elif e.keycode == 67 and e.keysym != "c" and e.char != "с":
@@ -1120,5 +1166,6 @@ def keypress(e):
 if __name__ == "__main__":
     root = TkinterDnD.Tk()
     root.bind_all("<KeyPress>", keypress)
+    install_text_context_menu(root)
     app = ImageCaptionApp(root)
     root.mainloop()
