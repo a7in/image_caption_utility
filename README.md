@@ -19,7 +19,7 @@
 - Create subfolders inside the current folder via the "New folder" button.
 - EXIF tab showing prompt/caption text embedded in the image (Automatic1111, ComfyUI).
 - AI auto-captioning via an external LLM (OpenAI-compatible endpoint, e.g. llama-server):
-  - "Auto-caption" generates a plain English description for the current image; the result is kept even if you navigate away (saved to the original image).
+  - "Auto-caption" generates a description for the current image; the result is kept even if you navigate away.
   - "Caption all" batch-generates captions for every image without one, with progress shown in the thumbnail progress bar and a Stop option.
   - "LLM settings" configures the connection (base URL, API key, model auto-detect, prompts, etc.); settings are stored in `auto_caption_settings.ini` in the program folder.
 
@@ -39,6 +39,13 @@
 2. Specify the directory with images.
 
 Captions are saved automatically when changing the current image.
+
+### AI auto-captioning:
+1. You need an OpenAI-compatible LLM endpoint with vision support — either a remote API or a local server (e.g. `llama-server` from llama.cpp, LM Studio, Ollama).
+   - Example local launch: `llama-server.exe -m <vision-model>.gguf --mmproj <mmproj>.gguf -c 16384 --port 8080 --temp 0.2 --top-p 0.9`
+2. Click **LLM settings**, set the base URL (e.g. `http://127.0.0.1:8080/v1`) and, for a remote API, the API key. Use **Test connection** to verify and to auto-detect the model (leave the model field blank to pick it automatically). Settings are stored in `auto_caption_settings.ini` in the program folder.
+3. **Auto-caption** generates a description for the current image; the result is kept even if you switch images while it runs.
+4. **Caption all** generates captions for every image without one, showing progress (click again to stop).
 
 ## License:
 This project is licensed under the MIT License. See the LICENSE file for details.
