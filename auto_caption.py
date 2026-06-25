@@ -73,6 +73,11 @@ class LLMSettings:
     max_tokens: int = 1000
     temperature: float = 0.2
     timeout: float = 180.0
+    # Sampling sent on every request so the result does not depend on the
+    # server's launch-time defaults (aggressive penalties can produce garbage).
+    top_p: float = 0.9
+    presence_penalty: float = 0.0
+    repeat_penalty: float = 1.0
     # auto | original | png | jpeg : how the image is encoded before sending
     vision_image_format: str = "auto"
 
@@ -216,6 +221,10 @@ def generate_caption(settings: LLMSettings, image_path: str) -> str:
     payload = {
         "model": model,
         "temperature": settings.temperature,
+        "top_p": settings.top_p,
+        "presence_penalty": settings.presence_penalty,
+        # llama.cpp's name; OpenAI-style servers ignore unknown keys.
+        "repeat_penalty": settings.repeat_penalty,
         "max_tokens": settings.max_tokens,
         "messages": [
             {"role": "system", "content": settings.system_prompt},
@@ -255,7 +264,9 @@ def generate_caption(settings: LLMSettings, image_path: str) -> str:
 
     try:
         parsed = json.loads(body)
-        content = parsed["choices"][0]["message"]["content"]
+        choice = parsed["choices"][0]
+        message = choice["message"]
+        content = message.get("content")
     except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
         raise RuntimeError(f"Unexpected LLM response: {body[:500]}") from exc
 
@@ -264,9 +275,24 @@ def generate_caption(settings: LLMSettings, image_path: str) -> str:
             part.get("text", "") for part in content if isinstance(part, dict)
         )
     caption = (content or "").strip().strip('"').strip()
-    if not caption:
-        raise RuntimeError("LLM returned an empty caption.")
-    return caption
+    if caption:
+        return caption
+
+    # Reasoning models may leave content empty and put text in reasoning_content.
+    # That text is the model's thinking, not a finished caption, so we don't use
+    # it — but we point the user at the real cause.
+    if (message.get("reasoning_content") or "").strip():
+        raise RuntimeError(
+            "The model returned only reasoning/thinking text and no caption. "
+            "This is usually a reasoning model or an aggressive sampling setup. "
+            "Try a non-reasoning vision model, or relaunch the server without "
+            "high presence/repeat penalties."
+        )
+    finish = choice.get("finish_reason")
+    raise RuntimeError(
+        f"LLM returned an empty caption (finish_reason={finish}). Check the model "
+        "and the server's sampling settings."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +314,9 @@ class _SettingsDialog(Toplevel):
         self._model = StringVar(value=settings.model)
         self._max_tokens = StringVar(value=str(settings.max_tokens))
         self._temperature = StringVar(value=str(settings.temperature))
+        self._top_p = StringVar(value=str(settings.top_p))
+        self._presence_penalty = StringVar(value=str(settings.presence_penalty))
+        self._repeat_penalty = StringVar(value=str(settings.repeat_penalty))
         self._timeout = StringVar(value=str(settings.timeout))
         self._fmt = StringVar(value=settings.vision_image_format)
 
@@ -315,6 +344,9 @@ class _SettingsDialog(Toplevel):
 
         row = self._entry(body, row, "Max tokens", self._max_tokens)
         row = self._entry(body, row, "Temperature", self._temperature)
+        row = self._entry(body, row, "Top-p", self._top_p)
+        row = self._entry(body, row, "Presence penalty", self._presence_penalty)
+        row = self._entry(body, row, "Repeat penalty", self._repeat_penalty)
         row = self._entry(body, row, "Timeout (s)", self._timeout)
 
         Label(body, text="Image format").grid(row=row, column=0, sticky="w", pady=3)
@@ -399,11 +431,15 @@ class _SettingsDialog(Toplevel):
         try:
             max_tokens = int(self._max_tokens.get().strip())
             temperature = float(self._temperature.get().strip())
+            top_p = float(self._top_p.get().strip())
+            presence_penalty = float(self._presence_penalty.get().strip())
+            repeat_penalty = float(self._repeat_penalty.get().strip())
             timeout = float(self._timeout.get().strip())
         except ValueError:
             messagebox.showerror(
                 "Invalid value",
-                "Max tokens must be an integer; temperature and timeout must be numbers.",
+                "Max tokens must be an integer; temperature, top-p, penalties and "
+                "timeout must be numbers.",
                 parent=self,
             )
             return
@@ -416,6 +452,9 @@ class _SettingsDialog(Toplevel):
             user_prompt=self._user.get("1.0", "end-1c").strip() or DEFAULT_USER_PROMPT,
             max_tokens=max_tokens,
             temperature=temperature,
+            top_p=top_p,
+            presence_penalty=presence_penalty,
+            repeat_penalty=repeat_penalty,
             timeout=timeout,
             vision_image_format=self._fmt.get().strip() or "auto",
         )
