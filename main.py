@@ -152,7 +152,7 @@ class ImageCaptionApp:
         self.prev_button  = Button(img_ctrl_frame, text="Prev", command=lambda: self.select_image(-1))
         self.next_button  = Button(img_ctrl_frame, text="Next", command=lambda: self.select_image(1))
         self.index_label  = Label(img_ctrl_frame, text="", fg="blue")
-        self.dir_entry    = ttk.Combobox(img_ctrl_frame, state="readonly", width=32)
+        self.dir_entry    = ttk.Combobox(img_ctrl_frame, state="readonly", width=32, height=40)
         self.file_entry   = Entry(img_ctrl_frame)
 
         self.prev_button.pack(side=LEFT, padx=2, pady=2)
@@ -243,16 +243,27 @@ class ImageCaptionApp:
         # filter bar
         filter_frame = Frame(nav_frame)
         filter_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=2, pady=2)
-        filter_frame.grid_columnconfigure(0, weight=1)
+        filter_frame.grid_columnconfigure(1, weight=1)
+        filter_frame.grid_columnconfigure(3, weight=1)
 
-        Label(filter_frame, text="Filter:").pack(side=LEFT, padx=(0, 2))
-        self.filter_entry = Entry(filter_frame)
-        self.filter_entry.pack(side=LEFT, fill=X, expand=True, padx=2)
+        Label(filter_frame, text="Filter:").grid(row=0, column=0, padx=(0, 2))
+        filter_entry_frame = Frame(filter_frame)
+        filter_entry_frame.grid(row=0, column=1, sticky="ew", padx=2)
+        self.filter_entry = Entry(filter_entry_frame)
+        self.filter_entry.pack(fill=X, expand=True)
         self.filter_entry.bind("<Return>", self.filter_files)
         Hovertip(self.filter_entry, text="Enter text and press Enter to filter by caption content")
-        Button(filter_frame, text="Clear", command=self.clear_filter).pack(side=LEFT, padx=2)
+        self.clear_filter_button = Button(filter_frame, text="Clear", command=self.clear_filter)
+        self.clear_filter_button.grid(row=0, column=2, padx=2)
+        dir_filter_frame = Frame(filter_frame)
+        dir_filter_frame.grid(row=0, column=3, sticky="ew", padx=2)
+        self.dir_filter = ttk.Combobox(dir_filter_frame, state="readonly", height=40)
+        self.dir_filter.pack(fill=X, expand=True)
+        self.dir_filter.bind("<<ComboboxSelected>>", self.filter_files)
+        Hovertip(self.dir_filter, text="Filter list by folder")
         self.show_empty_var = BooleanVar()
-        Checkbutton(filter_frame, text="Show empty", variable=self.show_empty_var, command=self.filter_files).pack(side=LEFT, padx=2)
+        Checkbutton(filter_frame, text="Show empty", variable=self.show_empty_var,
+                    command=self.filter_files).grid(row=0, column=4, padx=2)
 
         # mode toggle bar
         mode_frame = Frame(nav_frame)
@@ -608,17 +619,70 @@ class ImageCaptionApp:
     # Filter
     # ==================================================================
 
-    def filter_files(self, event=None):
+    def _collect_subdirs(self) -> list[str]:
+        if not self.image_directory:
+            return []
+        dirs = []
+        for root, _, _ in os.walk(self.image_directory):
+            r = os.path.relpath(root, self.image_directory)
+            dirs.append("\\" if r == "." else self._reldisp(r))
+        dirs.sort()
+        return dirs
+
+    def _refresh_dir_comboboxes(self):
+        dirs = self._collect_subdirs()
+        self.dir_entry["values"] = dirs
+        self.dir_filter["values"] = dirs
+        if not self.dir_filter.get():
+            self.dir_filter.set("\\")
+
+    def _append_subdir(self, disp: str):
+        for combo in (self.dir_entry, self.dir_filter):
+            current = list(combo["values"])
+            if disp not in current:
+                current.append(disp)
+                current.sort()
+                combo["values"] = current
+
+    def _path_in_dir(self, rp: str, dir_disp: str) -> bool:
+        r"""True if *rp* is in folder *dir_disp* or a subfolder. \\ = no restriction."""
+        if dir_disp == "\\":
+            return True
+        dir_norm = dir_disp.replace("\\", "/")
+        rp_dir = os.path.dirname(rp.replace("\\", "/"))
+        return rp_dir == dir_norm or rp_dir.startswith(dir_norm + "/")
+
+    def _file_passes_filters(self, rp: str) -> bool:
         text = self.filter_entry.get().strip()
         show_empty = self.show_empty_var.get()
-        if not text and not show_empty:
-            self.clear_filter()
-            return
+        dir_sel = self.dir_filter.get() or "\\"
 
-        rows = self.db.get_all(filter_text=text, show_empty=show_empty)
-        rp_set = {r["rel_path"] for r in rows}
-        self.image_files = [rp for rp in self.all_image_files
-                            if rp in rp_set]
+        if text or show_empty:
+            rows = self.db.get_all(filter_text=text, show_empty=show_empty)
+            if rp not in {r["rel_path"] for r in rows}:
+                return False
+        if dir_sel != "\\" and not self._path_in_dir(rp, dir_sel):
+            return False
+        return True
+
+    def _apply_filters(self):
+        text = self.filter_entry.get().strip()
+        show_empty = self.show_empty_var.get()
+        dir_sel = self.dir_filter.get() or "\\"
+
+        if not text and not show_empty and dir_sel == "\\":
+            self.image_files = list(self.all_image_files)
+        else:
+            if text or show_empty:
+                rows = self.db.get_all(filter_text=text, show_empty=show_empty)
+                pool = {r["rel_path"] for r in rows}
+                candidates = [rp for rp in self.all_image_files if rp in pool]
+            else:
+                candidates = list(self.all_image_files)
+            if dir_sel != "\\":
+                candidates = [rp for rp in candidates if self._path_in_dir(rp, dir_sel)]
+            self.image_files = candidates
+
         self.image_index = 0
         self._rebuild_file_list()
         self._resolve_index_after_filter()
@@ -626,15 +690,14 @@ class ImageCaptionApp:
         if self.view_mode == "thumbs":
             self.thumb_view.set_images(self.image_files, self.image_index)
 
+    def filter_files(self, event=None):
+        self._apply_filters()
+
     def clear_filter(self):
         self.filter_entry.delete(0, END)
         self.show_empty_var.set(False)
-        self.image_files = list(self.all_image_files)
-        self._rebuild_file_list()
-        self._resolve_index_after_filter()
-
-        if self.view_mode == "thumbs":
-            self.thumb_view.set_images(self.image_files, self.image_index)
+        self.dir_filter.set("\\")
+        self._apply_filters()
 
     def _resolve_index_after_filter(self):
         if not self.image_files:
@@ -683,6 +746,10 @@ class ImageCaptionApp:
         # open DB and sync
         self.db.open(directory)
         synced_rps = self.db.sync(found)
+        # caption .txt files may have been added/edited/removed outside this
+        # utility; sync() only refreshes captions for *new* rows, so re-read
+        # every caption from disk to actualise the cached DB state.
+        self.db.update_all_captions(synced_rps)
 
         self.image_directory = directory
         self.all_image_files = synced_rps
@@ -690,13 +757,8 @@ class ImageCaptionApp:
         self.image_index     = 0
         self._sort_state = {"col": None, "reverse": False}
 
-        # populate directories combobox
-        dirs = []
-        for root, _, _ in os.walk(directory):
-            r = os.path.relpath(root, directory)
-            dirs.append("\\" if r == "." else r)
-        dirs.sort()
-        self.dir_entry["values"] = dirs
+        self._refresh_dir_comboboxes()
+        self.dir_filter.set("\\")
 
         self._rebuild_file_list()
 
@@ -707,11 +769,7 @@ class ImageCaptionApp:
 
     def open_folder(self):
         self.load_images()
-        self.image_index = 0
-        self.display_image()
-        self.filter_entry.delete(0, END)
-        if self.view_mode == "thumbs":
-            self.thumb_view.set_images(self.image_files, self.image_index)
+        self.clear_filter()
 
     def create_subfolder(self):
         if not self.image_directory:
@@ -731,12 +789,7 @@ class ImageCaptionApp:
             messagebox.showerror("Error", str(e))
         else:
             rel = os.path.relpath(new_path, self.image_directory)
-            disp = rel.replace("/", "\\")
-            current = list(self.dir_entry["values"])
-            if disp not in current:
-                current.append(disp)
-                current.sort()
-                self.dir_entry["values"] = current
+            self._append_subdir(self._reldisp(rel))
 
     # ==================================================================
     # Filesystem watcher (additions only)
@@ -794,14 +847,7 @@ class ImageCaptionApp:
 
         self.all_image_files.append(rp)
 
-        # Visible only if it passes the active filter.
-        text = self.filter_entry.get().strip()
-        show_empty = self.show_empty_var.get()
-        visible = True
-        if text or show_empty:
-            rows = self.db.get_all(filter_text=text, show_empty=show_empty)
-            visible = rp in {r["rel_path"] for r in rows}
-        if not visible:
+        if not self._file_passes_filters(rp):
             return
 
         self.image_files.append(rp)
@@ -935,15 +981,12 @@ class ImageCaptionApp:
 
         self.file_entry.delete(0, END)
         self.file_entry.insert(0, os.path.basename(new_rp))
-        self._rebuild_file_list()
-        rp_sel = self.image_files[self.image_index]
-        self.file_list.selection_set(rp_sel)
-        self.file_list.see(rp_sel)
 
         self.thumb_view.rename(old_rp, new_rp)
 
         new_rel_dir = os.path.relpath(new_dir, self.image_directory)
         self.dir_entry.set(self._reldisp(new_rel_dir))
+        self._apply_filters()
         
     def _update_path_in_lists(self, old_rp: str, new_rp: str):
         if old_rp in self.image_files:
