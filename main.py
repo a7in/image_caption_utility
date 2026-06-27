@@ -619,6 +619,12 @@ class ImageCaptionApp:
     # Filter
     # ==================================================================
 
+    @staticmethod
+    def _subdir_sort_key(disp: str):
+        if disp == "\\":
+            return (0, "", "")
+        return (1, disp.casefold(), disp)
+
     def _collect_subdirs(self) -> list[str]:
         if not self.image_directory:
             return []
@@ -626,7 +632,7 @@ class ImageCaptionApp:
         for root, _, _ in os.walk(self.image_directory):
             r = os.path.relpath(root, self.image_directory)
             dirs.append("\\" if r == "." else self._reldisp(r))
-        dirs.sort()
+        dirs.sort(key=self._subdir_sort_key)
         return dirs
 
     def _refresh_dir_comboboxes(self):
@@ -641,7 +647,7 @@ class ImageCaptionApp:
             current = list(combo["values"])
             if disp not in current:
                 current.append(disp)
-                current.sort()
+                current.sort(key=self._subdir_sort_key)
                 combo["values"] = current
 
     def _path_in_dir(self, rp: str, dir_disp: str) -> bool:
