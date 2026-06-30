@@ -185,7 +185,18 @@ class ThumbnailView:
     # Public data API
     # ------------------------------------------------------------------
 
-    def set_images(self, rel_paths: list[str], current_index: int = 0):
+    def yview(self) -> tuple[float, float]:
+        """Return the canvas vertical scroll fractions (top, bottom)."""
+        return self._canvas.yview()
+
+    def set_images(
+        self,
+        rel_paths: list[str],
+        current_index: int = 0,
+        *,
+        preserve_scroll: bool = False,
+        yview: tuple[float, float] | None = None,
+    ):
         """Replace the file set and re-render the visible window."""
         self._unmount_range(set(self._mounted))
         self._photos.clear()
@@ -194,6 +205,14 @@ class ThumbnailView:
             self._current_idx = max(0, min(current_index, len(self._files) - 1))
         else:
             self._current_idx = 0
+
+        if preserve_scroll and yview is not None:
+            self._user_scrolled = True
+            self._recompute_layout()
+            self._canvas.yview_moveto(yview[0])
+            self._sync_visible()
+            return
+
         self._user_scrolled = False
 
         # Reset scroll position — new data set always starts with current in view.

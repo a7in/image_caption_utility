@@ -437,7 +437,7 @@ class ImageCaptionApp:
     # Image display
     # ==================================================================
 
-    def display_image(self):
+    def display_image(self, scroll_into_view: bool = True):
         if not self.image_files:
             return
         self.index_label.config(text=f"{self.image_index + 1} of {len(self.image_files)}")
@@ -468,10 +468,11 @@ class ImageCaptionApp:
 
         rp_sel = self.image_files[self.image_index]
         self.file_list.selection_set(rp_sel)
-        self.file_list.see(rp_sel)
+        if scroll_into_view:
+            self.file_list.see(rp_sel)
 
         if self.view_mode == "thumbs":
-            self.thumb_view.set_current(self.image_index)
+            self.thumb_view.set_current(self.image_index, ensure_visible=scroll_into_view)
 
 
     def _make_exif_tab(self):
@@ -675,6 +676,11 @@ class ImageCaptionApp:
         text = self.filter_entry.get().strip()
         show_empty = self.show_empty_var.get()
         dir_sel = self.dir_filter.get() or "\\"
+        prev_index = self.image_index
+        list_yview = self.file_list.yview()
+        thumb_yview = (
+            self.thumb_view.yview() if self.view_mode == "thumbs" else None
+        )
 
         if not text and not show_empty and dir_sel == "\\":
             self.image_files = list(self.all_image_files)
@@ -689,12 +695,12 @@ class ImageCaptionApp:
                 candidates = [rp for rp in candidates if self._path_in_dir(rp, dir_sel)]
             self.image_files = candidates
 
-        self.image_index = 0
         self._rebuild_file_list()
-        self._resolve_index_after_filter()
-
-        if self.view_mode == "thumbs":
-            self.thumb_view.set_images(self.image_files, self.image_index)
+        self._resolve_index_after_filter(
+            prev_index=prev_index,
+            list_yview=list_yview,
+            thumb_yview=thumb_yview,
+        )
 
     def filter_files(self, event=None):
         self._apply_filters()
@@ -705,7 +711,12 @@ class ImageCaptionApp:
         self.dir_filter.set("\\")
         self._apply_filters()
 
-    def _resolve_index_after_filter(self):
+    def _resolve_index_after_filter(
+        self,
+        prev_index: int = 0,
+        list_yview: tuple[float, float] | None = None,
+        thumb_yview: tuple[float, float] | None = None,
+    ):
         if not self.image_files:
             self.current_image = None
             self.current_caption_file = None
@@ -714,12 +725,36 @@ class ImageCaptionApp:
             self.text_area.delete(1.0, END)
             self.file_entry.delete(0, END)
             self.index_label.config(text="0 of 0")
+            if self.view_mode == "thumbs":
+                self.thumb_view.set_images([], 0)
             return
-        if self.current_image and self.current_image in self.image_files:
+
+        current_stays = (
+            self.current_image is not None
+            and self.current_image in self.image_files
+        )
+        if current_stays:
             self.image_index = self.image_files.index(self.current_image)
+            preserve_scroll = False
         else:
-            self.image_index = 0
-        self.display_image()
+            self.image_index = min(prev_index, len(self.image_files) - 1)
+            preserve_scroll = True
+
+        self.display_image(scroll_into_view=not preserve_scroll)
+
+        if preserve_scroll and list_yview is not None:
+            self.file_list.yview_moveto(list_yview[0])
+            rp = self.image_files[self.image_index]
+            if self.file_list.exists(rp):
+                self.file_list.selection_set(rp)
+
+        if self.view_mode == "thumbs":
+            self.thumb_view.set_images(
+                self.image_files,
+                self.image_index,
+                preserve_scroll=preserve_scroll,
+                yview=thumb_yview if preserve_scroll else None,
+            )
 
     # ==================================================================
     # Load images / open folder
